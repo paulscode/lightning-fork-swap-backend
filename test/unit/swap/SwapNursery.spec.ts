@@ -33,6 +33,7 @@ import {
   queryERC20SwapValuesFromLock,
   queryEtherSwapValuesFromLock,
 } from '../../../lib/wallet/ethereum/contracts/ContractUtils';
+import NotBroadcastError from '../../../lib/wallet/providers/NotBroadcastError';
 
 let mockGetSwapResult: any = null;
 let mockGetChainSwapResult: any = null;
@@ -755,6 +756,34 @@ describe('SwapNursery', () => {
         (handleSwapSendFailedSpy.mock.calls[0][2] as Error).message,
       ).toEqual(Errors.HOOK_REJECTED().message);
     });
+
+    test.each`
+      description                          | error                                                                 | fails
+      ${'the node refused to send'}        | ${new NotBroadcastError({ code: -6, message: 'Insufficient funds' })} | ${true}
+      ${'the answer to the send was lost'} | ${new Error('socket hang up')}                                        | ${false}
+    `(
+      'should fail a reverse lockup only if nothing went out: $description',
+      async ({ error, fails }) => {
+        const nursery = makeSendApprovalNursery();
+        const wallet = {
+          symbol: 'BTC',
+          sendToAddress: jest.fn().mockRejectedValue(error),
+        };
+        const handleSwapSendFailedSpy = jest
+          .spyOn(nursery as any, 'handleSwapSendFailed')
+          .mockResolvedValue(undefined);
+
+        await (nursery as any).lockupUtxo(
+          reverseSendSwap,
+          { estimateFee: jest.fn().mockResolvedValue(2) },
+          wallet,
+          SendApprovalAction.Accept,
+        );
+
+        expect(wallet.sendToAddress).toHaveBeenCalledTimes(1);
+        expect(handleSwapSendFailedSpy).toHaveBeenCalledTimes(fails ? 1 : 0);
+      },
+    );
 
     test('should lock up when the send approval is accepted', async () => {
       const nursery = makeSendApprovalNursery();

@@ -92,6 +92,7 @@ import {
 } from '../wallet/ethereum/contracts/ContractUtils';
 import type Contracts from '../wallet/ethereum/contracts/Contracts';
 import type ERC20WalletProvider from '../wallet/providers/ERC20WalletProvider';
+import NotBroadcastError from '../wallet/providers/NotBroadcastError';
 import ArkNursery from './ArkNursery';
 import Errors from './Errors';
 import EthereumNursery from './EthereumNursery';
@@ -1985,6 +1986,10 @@ class SwapNursery extends TypedEventEmitter<SwapNurseryEvents> {
     approval: SendApprovalAction,
     lightningClient?: LightningClient,
   ) => {
+    // Set once the wallet is asked to send: from then on, an error may have
+    // come after the lockup went out.
+    let sendAttempted = false;
+
     try {
       this.assertLockupSignerEnabled(swap);
       this.assertSendApproved(approval);
@@ -2021,6 +2026,7 @@ class SwapNursery extends TypedEventEmitter<SwapNurseryEvents> {
           ? (swap as ReverseSwap).lockupAddress
           : (swap as ChainSwapInfo).sendingData.lockupAddress;
 
+      sendAttempted = true;
       const { transaction, transactionId, vout, fee } =
         await wallet.sendToAddress(
           lockupAddress,
@@ -2045,6 +2051,18 @@ class SwapNursery extends TypedEventEmitter<SwapNurseryEvents> {
         ),
       });
     } catch (error) {
+      // Failing the swap cancels the hold invoice. If the lockup may be on
+      // chain, that would give the user the Lightning payment back while
+      // they can still claim the lockup, so the invoice is left held (lnd
+      // cancels it itself before its HTLCs expire) for the operator to look
+      // at.
+      if (sendAttempted && !(error instanceof NotBroadcastError)) {
+        this.logger.error(
+          `Lockup of ${swapTypeToPrettyString(swap.type)} Swap ${swap.id} may have been broadcast before this error; not failing the swap, check the ${wallet.symbol} wallet for a transaction labelled "${TransactionLabelRepository.lockupLabel(swap)}": ${formatError(error)}`,
+        );
+        return;
+      }
+
       await this.handleSwapSendFailed(
         swap,
         wallet.symbol,
