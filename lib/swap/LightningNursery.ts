@@ -10,7 +10,7 @@ import ReverseSwapRepository from '../db/repositories/ReverseSwapRepository';
 import WrappedSwapRepository from '../db/repositories/WrappedSwapRepository';
 import LightningErrors from '../lightning/Errors';
 import type { LightningClient } from '../lightning/LightningClient';
-import { InvoiceState } from '../lightning/LightningClient';
+import { HtlcState, InvoiceState } from '../lightning/LightningClient';
 import type SelfPaymentClient from '../lightning/SelfPaymentClient';
 import type Sidecar from '../sidecar/Sidecar';
 import { type Currency, getLightningClients } from '../wallet/WalletManager';
@@ -20,6 +20,11 @@ class LightningNursery extends TypedEventEmitter<{
   'minerfee.invoice.paid': ReverseSwap;
 }> {
   public static readonly lightningClientCallTimeout = 15_000;
+
+  // lnd's default `invoices.holdexpirydelta`
+  public static readonly holdExpiryDelta = 18;
+  // Blocks the service's refund of a timed out lockup gets to confirm
+  public static readonly refundConfirmationMargin = 12;
 
   private lock = new InstrumentedLock('lightningNursery');
 
@@ -126,6 +131,50 @@ class LightningNursery extends TypedEventEmitter<{
     });
   };
 
+  /**
+   * Whether every HTLC held for a reverse swap's invoice expires late enough
+   * that lnd will still be holding it when the service's on-chain refund can
+   * confirm. lnd cancels a held invoice `holdExpiryDelta` blocks before its
+   * earliest HTLC expires; if that comes before the lockup times out, the
+   * payer would get the Lightning payment back and could still claim the
+   * lockup. Such a payment is refused by cancelling the invoice, before any
+   * coins are locked up.
+   */
+  private htlcsOutlastTimeout = async (
+    lightningClient: LightningClient,
+    reverseSwap: ReverseSwap,
+  ): Promise<boolean> => {
+    const { htlcs } = await lightningClient.lookupHoldInvoice(
+      getHexBuffer(reverseSwap.preimageHash),
+    );
+    const expiries = (htlcs ?? [])
+      .filter((htlc) => htlc.state === HtlcState.Accepted)
+      .map((htlc) => htlc.expiryHeight)
+      .filter((height): height is number => height !== undefined);
+
+    // Nodes that do not report expiries are trusted as before.
+    if (expiries.length === 0) {
+      return true;
+    }
+
+    const earliest = Math.min(...expiries);
+    const required =
+      reverseSwap.timeoutBlockHeight +
+      LightningNursery.holdExpiryDelta +
+      LightningNursery.refundConfirmationMargin;
+    if (earliest >= required) {
+      return true;
+    }
+
+    this.logger.warn(
+      `Cancelling hold invoice of Reverse Swap ${reverseSwap.id}: its HTLC expires at ${earliest}, needs ${required} (lockup timeout ${reverseSwap.timeoutBlockHeight})`,
+    );
+    await lightningClient.cancelHoldInvoice(
+      getHexBuffer(reverseSwap.preimageHash),
+    );
+    return false;
+  };
+
   private handleAcceptedInvoice = async (
     lightningClient: LightningClient,
     invoice: string,
@@ -149,6 +198,10 @@ class LightningNursery extends TypedEventEmitter<{
       this.logger.verbose(
         `Hold invoice of Reverse Swap ${reverseSwap.id} was accepted`,
       );
+
+      if (!(await this.htlcsOutlastTimeout(lightningClient, reverseSwap))) {
+        return;
+      }
 
       if (
         reverseSwap.minerFeeInvoicePreimage === null ||

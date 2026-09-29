@@ -599,7 +599,7 @@ describe('TimeoutDeltaProvider', () => {
   describe('addBuffer', () => {
     test.each`
       description                | blocks  | sameCurrency | expected
-      ${'same currency'}         | ${144}  | ${true}      | ${159}
+      ${'same currency'}         | ${144}  | ${true}      | ${204}
       ${'cross chain'}           | ${144}  | ${false}     | ${180}
       ${'cross chain rounds up'} | ${79}   | ${false}     | ${99}
       ${'zero'}                  | ${0}    | ${false}     | ${0}
@@ -627,7 +627,7 @@ describe('TimeoutDeltaProvider', () => {
   describe('self payment guard calibration', () => {
     test.each`
       description        | symbol                   | onchainDelta | currentBlock | expected
-      ${'same currency'} | ${'BTC'}                 | ${144}       | ${100}       | ${159}
+      ${'same currency'} | ${'BTC'}                 | ${144}       | ${100}       | ${204}
       ${'cross chain'}   | ${ElementsClient.symbol} | ${1_440}     | ${200}       | ${180}
     `(
       'should recompute the reverse swap lightning timeout delta for $description',

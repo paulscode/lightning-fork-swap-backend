@@ -54,8 +54,16 @@ type PairTimeoutBlockDeltas = {
 class TimeoutDeltaProvider {
   public static readonly noRoutes = -1;
 
-  // Buffers to account for the block time drift between the two legs of a swap
-  public static readonly sameCurrencyBuffer = 15;
+  // Buffers to account for the block time drift between the two legs of a swap.
+  //
+  // For a reverse swap the buffer is also what stands between the on-chain
+  // timeout and lnd giving up on the hold invoice: lnd cancels an accepted
+  // hold invoice `invoices.holdexpirydelta` (18) blocks before its HTLC
+  // expires, and from that moment the payer has their Lightning funds back
+  // while still able to claim the lockup with the preimage until the
+  // service's refund confirms. With 15 blocks the cancel came at or before
+  // the timeout. 60 blocks leave the refund about 40 blocks to confirm.
+  public static readonly sameCurrencyBuffer = 60;
   public static readonly crossChainBufferFactor = 0.25;
 
   // A map of the symbols of currencies and their block times in minutes

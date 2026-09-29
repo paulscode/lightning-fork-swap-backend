@@ -2741,7 +2741,7 @@ describe('Service', () => {
       orderSide: OrderSide.BUY,
       onchainTimeoutBlockDelta: 1,
       version: SwapVersion.Legacy,
-      lightningTimeoutBlockDelta: 16,
+      lightningTimeoutBlockDelta: 61,
       holdInvoiceAmount: invoiceAmount,
       percentageFee: invoiceAmount * mockGetPercentageFeeResult,
     });
@@ -2936,7 +2936,7 @@ describe('Service', () => {
       orderSide: OrderSide.BUY,
       onchainTimeoutBlockDelta: 1,
       version: SwapVersion.Legacy,
-      lightningTimeoutBlockDelta: 16,
+      lightningTimeoutBlockDelta: 61,
       holdInvoiceAmount: invoiceAmount,
       percentageFee: invoiceAmount * mockGetPercentageFeeResult,
     });
@@ -3008,7 +3008,7 @@ describe('Service', () => {
       orderSide: OrderSide.BUY,
       onchainTimeoutBlockDelta: 1,
       version: SwapVersion.Legacy,
-      lightningTimeoutBlockDelta: 16,
+      lightningTimeoutBlockDelta: 61,
       percentageFee: 2048,
     });
 
@@ -3352,7 +3352,7 @@ describe('Service', () => {
       orderSide: OrderSide.BUY,
       onchainTimeoutBlockDelta: 1,
       version: SwapVersion.Legacy,
-      lightningTimeoutBlockDelta: 16,
+      lightningTimeoutBlockDelta: 61,
       holdInvoiceAmount: invoiceAmount,
       percentageFee: invoiceAmount * mockGetPercentageFeeResult,
     });
@@ -3437,7 +3437,7 @@ describe('Service', () => {
       orderSide: OrderSide.BUY,
       onchainTimeoutBlockDelta: 1,
       version: SwapVersion.Legacy,
-      lightningTimeoutBlockDelta: 16,
+      lightningTimeoutBlockDelta: 61,
       prepayMinerFeeInvoiceAmount: mockGetBaseFeeResult,
       holdInvoiceAmount: invoiceAmount - mockGetBaseFeeResult,
       percentageFee: invoiceAmount * mockGetPercentageFeeResult,
@@ -3578,7 +3578,7 @@ describe('Service', () => {
       } as any);
 
     test('should create reverse swaps with bolt12 invoices', async () => {
-      const decodedInvoice = bolt12Invoice([16]);
+      const decodedInvoice = bolt12Invoice([61]);
       const paymentHash = decodedInvoice.paymentHash!;
       service.sidecar.decodeInvoiceOrOffer = jest
         .fn()
@@ -3611,14 +3611,14 @@ describe('Service', () => {
         version: SwapVersion.Legacy,
         invoice: { invoice, decoded: decodedInvoice },
         onchainTimeoutBlockDelta: 1,
-        lightningTimeoutBlockDelta: 16,
+        lightningTimeoutBlockDelta: 61,
       });
     });
 
     test('should throw if the bolt12 invoice CLTV is too small', async () => {
       service.sidecar.decodeInvoiceOrOffer = jest
         .fn()
-        .mockResolvedValue(bolt12Invoice([15]));
+        .mockResolvedValue(bolt12Invoice([60]));
 
       await expect(
         service.createReverseSwap({
@@ -3628,7 +3628,7 @@ describe('Service', () => {
           claimPublicKey: getHexBuffer('0xfff'),
           version: SwapVersion.Legacy,
         } as any),
-      ).rejects.toEqual(Errors.INVOICE_CLTV_TOO_SMALL(15, 16));
+      ).rejects.toEqual(Errors.INVOICE_CLTV_TOO_SMALL(60, 61));
 
       expect(mockCreateReverseSwap).not.toHaveBeenCalled();
     });
@@ -3646,7 +3646,7 @@ describe('Service', () => {
           claimPublicKey: getHexBuffer('0xfff'),
           version: SwapVersion.Legacy,
         } as any),
-      ).rejects.toEqual(Errors.INVOICE_CLTV_TOO_SMALL(10, 16));
+      ).rejects.toEqual(Errors.INVOICE_CLTV_TOO_SMALL(10, 61));
 
       expect(mockCreateReverseSwap).not.toHaveBeenCalled();
     });
