@@ -1,4 +1,5 @@
 use crate::chain::Client;
+use crate::chain::header_v2;
 use crate::{chain::types::Type, wallet::Network};
 use bitcoin::ScriptBuf;
 use bitcoin::hashes::Hash;
@@ -24,6 +25,8 @@ pub enum Transaction {
 #[derive(PartialEq, Debug, Clone)]
 pub enum BlockHeader {
     Bitcoin(bitcoin::block::Header),
+    /// A 164-byte header of the BLAKE2b chain; see `header_v2`.
+    BitcoinV2(Box<[u8; header_v2::HEADER_LEN_V2]>),
     Elements(Box<elements::BlockHeader>),
 }
 
@@ -198,6 +201,17 @@ impl Block {
 
     pub fn parse(block_type: &Type, block: &[u8]) -> anyhow::Result<Block> {
         match block_type {
+            Type::Bitcoin if header_v2::header_len(block) == Some(header_v2::HEADER_LEN_V2) => {
+                if block.len() < header_v2::HEADER_LEN_V2 {
+                    return Err(anyhow::anyhow!("block too short for a v2 header"));
+                }
+                let (header, body) = block.split_at(header_v2::HEADER_LEN_V2);
+                let txdata: Vec<bitcoin::Transaction> = bitcoin::consensus::deserialize(body)?;
+                Ok(Block {
+                    header: BlockHeader::BitcoinV2(Box::new(header.try_into()?)),
+                    transactions: Arc::new(txdata.into_iter().map(Transaction::Bitcoin).collect()),
+                })
+            }
             Type::Bitcoin => {
                 let block: bitcoin::Block = bitcoin::consensus::deserialize(block)?;
                 Ok(Block {
@@ -225,6 +239,8 @@ impl Block {
 
     pub fn block_hash(&self) -> [u8; 32] {
         let mut hash = match &self.header {
+            // Already in display order.
+            BlockHeader::BitcoinV2(header) => return header_v2::block_hash_v2(header),
             BlockHeader::Bitcoin(header) => header.block_hash().to_raw_hash().to_byte_array(),
             BlockHeader::Elements(header) => header.block_hash().to_raw_hash().to_byte_array(),
         };

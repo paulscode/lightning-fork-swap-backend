@@ -14,6 +14,7 @@ pub mod bumper;
 pub mod chain_client;
 pub mod elements;
 pub mod elements_client;
+pub mod header_v2;
 mod mempool_client;
 pub mod mrh_watcher;
 mod rpc_client;
