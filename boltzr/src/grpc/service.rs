@@ -545,7 +545,7 @@ where
             }
         };
 
-        match crate::lightning::invoice::decode(network, &request.into_inner().invoice_or_offer) {
+        match crate::lightning::invoice::decode_blake2b(network, &request.into_inner().invoice_or_offer) {
             Ok(dec) => Ok(Response::new(match dec {
                 Invoice::Bolt11(invoice) => DecodeInvoiceOrOfferResponse {
                     is_expired: invoice.is_expired(),

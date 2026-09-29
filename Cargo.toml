@@ -84,3 +84,7 @@ async-tungstenite = { version = "0.34.1", features = [
 	"tokio-runtime",
 	"tokio-rustls-webpki-roots",
 ] }
+
+# Bitcoin BLAKE2b chain: invoices carry the required feature bit 512.
+[patch.crates-io]
+lightning-types = { path = "vendor/lightning-types" }

@@ -16,6 +16,9 @@ const DECODE_FUNCS: &[DecodeFunction] =
 #[derive(Debug, PartialEq)]
 pub enum InvoiceError {
     InvalidNetwork,
+    /// The invoice does not set `option_blake2b` (feature bit 512), so it
+    /// was not made by a node on the Bitcoin BLAKE2b chain.
+    NotBlake2bChain,
     DecodeError(String),
 }
 
@@ -23,6 +26,11 @@ impl Display for InvoiceError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             InvoiceError::InvalidNetwork => write!(f, "invalid network"),
+            InvoiceError::NotBlake2bChain => write!(
+                f,
+                "invoice is not for the Bitcoin BLAKE2b chain: it lacks feature bit 512 (option_blake2b); \
+                 it was probably made by a Lightning node on the SHA256 chain"
+            ),
             InvoiceError::DecodeError(data) => write!(f, "invalid invoice: {data}"),
         }
     }
@@ -56,6 +64,18 @@ impl Invoice {
         }
     }
 
+    /// Whether the invoice or offer carries `option_blake2b`, which every
+    /// node on the Bitcoin BLAKE2b chain sets and no node on the SHA256 chain
+    /// does. The genesis hash, network prefix and address format are the same
+    /// on both chains, so this bit is the only thing that tells them apart.
+    pub fn is_blake2b_chain(&self) -> bool {
+        match self {
+            Invoice::Bolt11(invoice) => invoice.features().is_some_and(|f| f.supports_blake2b()),
+            Invoice::Offer(offer) => offer.offer_features().supports_blake2b(),
+            Invoice::Bolt12(invoice) => invoice.invoice_features().supports_blake2b(),
+        }
+    }
+
     fn network_to_chain_hash(network: wallet::Network) -> ChainHash {
         match network {
             wallet::Network::Mainnet => ChainHash::BITCOIN,
@@ -70,6 +90,20 @@ pub fn decode(network: wallet::Network, invoice_or_offer: &str) -> Result<Invoic
     let invoice = parse(invoice_or_offer)?;
     if !invoice.is_for_network(network) {
         return Err(InvoiceError::InvalidNetwork);
+    }
+
+    Ok(invoice)
+}
+
+/// `decode`, refusing anything not made on the Bitcoin BLAKE2b chain. Every
+/// invoice and offer that enters the service from outside goes through this.
+pub fn decode_blake2b(
+    network: wallet::Network,
+    invoice_or_offer: &str,
+) -> Result<Invoice, InvoiceError> {
+    let invoice = decode(network, invoice_or_offer)?;
+    if !invoice.is_blake2b_chain() {
+        return Err(InvoiceError::NotBlake2bChain);
     }
 
     Ok(invoice)
@@ -125,7 +159,8 @@ fn decode_bolt11(invoice: &str) -> Result<Invoice, InvoiceError> {
 #[cfg(test)]
 mod test {
     use crate::lightning::invoice::{
-        Invoice, InvoiceError, decode, decode_bolt11, decode_bolt12_invoice, decode_bolt12_offer,
+        Invoice, InvoiceError, decode, decode_blake2b, decode_bolt11, decode_bolt12_invoice,
+        decode_bolt12_offer,
     };
     use crate::wallet;
     use bech32::NoChecksum;
@@ -157,6 +192,38 @@ mod test {
             InvoiceError::DecodeError(
                 "ParseError(Bech32Error(Parse(Char(InvalidChar('i')))))".to_string()
             )
+        );
+    }
+
+    /// Made by Lightning Fork 0.21.3-beta-blake2b.13 on regtest: carries the
+    /// required feature bit 512.
+    const BOLT11_INVOICE_BLAKE2B: &str = "lnbcrt12340n1p4tktmzpp5ggdr84f68a08yqlz6yh06l0ul92n9jmq84nxun4geuxp7a309jnsdq8w3jhxaqcqzzsxqyz5vqsp55g06tmkp8nrh99hywklkstyn3u4sd4nqd9x2wp5ykuxy5sq2uzhq9r8yqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqpqysgq7je49q3ts6mf8h88wflj0977evmj4kunrt5h3xep29lcmmvp63k9ypt5p6u68g45dj2clcnthfe459sqf2wamuz2ty9l4rtj9vhel0qquxjkn5";
+
+    #[test]
+    fn test_decode_blake2b() {
+        let decoded = decode_blake2b(wallet::Network::Regtest, BOLT11_INVOICE_BLAKE2B).unwrap();
+        assert!(decoded.is_blake2b_chain());
+        assert_eq!(decoded, decode_bolt11(BOLT11_INVOICE_BLAKE2B).unwrap());
+    }
+
+    #[test]
+    fn test_decode_blake2b_refuses_sha256_chain() {
+        assert!(
+            !decode(wallet::Network::Regtest, BOLT11_INVOICE)
+                .unwrap()
+                .is_blake2b_chain()
+        );
+        assert_eq!(
+            decode_blake2b(wallet::Network::Regtest, BOLT11_INVOICE).unwrap_err(),
+            InvoiceError::NotBlake2bChain
+        );
+        assert_eq!(
+            decode_blake2b(wallet::Network::Regtest, BOLT12_OFFER).unwrap_err(),
+            InvoiceError::NotBlake2bChain
+        );
+        assert_eq!(
+            decode_blake2b(wallet::Network::Mainnet, BOLT11_INVOICE_BLAKE2B).unwrap_err(),
+            InvoiceError::InvalidNetwork
         );
     }
 

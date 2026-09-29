@@ -250,7 +250,7 @@ where
 }
 
 fn offer_amount_msat(network: Network, offer: &str) -> std::result::Result<u64, AxumError> {
-    let offer = match crate::lightning::invoice::decode(network, offer) {
+    let offer = match crate::lightning::invoice::decode_blake2b(network, offer) {
         Ok(Invoice::Offer(offer)) => offer,
         _ => {
             return Err(AxumError::new(
