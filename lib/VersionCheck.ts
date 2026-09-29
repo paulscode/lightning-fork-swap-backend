@@ -90,7 +90,9 @@ class VersionCheck {
     },
     [LndClient.serviceName]: {
       minimal: '0.19.0',
-      maximal: '0.21.2',
+      // Lightning Fork, the lnd of the Bitcoin BLAKE2b chain, is based on
+      // lnd 0.21.3.
+      maximal: '0.21.3',
     },
   };
 
