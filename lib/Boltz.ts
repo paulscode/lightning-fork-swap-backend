@@ -13,8 +13,16 @@ import VersionCheck from './VersionCheck';
 import Api from './api/Api';
 import ArkClient from './chain/ArkClient';
 import ChainClient, { type IChainClient } from './chain/ChainClient';
+import {
+  ChainIdentityError,
+  chainIdentityRecheckMs,
+  checkChainIdentity,
+} from './chain/ChainIdentity';
 import ElementsClient from './chain/ElementsClient';
-import { resolveBitcoinNetwork } from './consts/BitcoinNetworks';
+import {
+  type BitcoinNetwork,
+  resolveBitcoinNetwork,
+} from './consts/BitcoinNetworks';
 import { CurrencyType } from './consts/Enums';
 import type { BlockchainInfo, NetworkInfo } from './consts/Types';
 import Database from './db/Database';
@@ -317,7 +325,12 @@ class Boltz {
           const prms: Promise<void>[] = [];
 
           if (currency.chainClient) {
-            prms.push(this.connectChainClient(currency.chainClient));
+            prms.push(
+              this.connectChainClient(
+                currency.chainClient,
+                currency.network as BitcoinNetwork,
+              ),
+            );
           }
 
           if (currency.clnClient) {
@@ -471,7 +484,10 @@ class Boltz {
     }
   };
 
-  private connectChainClient = async (client: IChainClient) => {
+  private connectChainClient = async (
+    client: IChainClient,
+    network: BitcoinNetwork,
+  ) => {
     const formatChainInfo = (
       networkInfo: NetworkInfo | undefined,
       blockchainInfo: BlockchainInfo | undefined,
@@ -502,6 +518,25 @@ class Boltz {
     } catch (error) {
       this.logCouldNotConnect(service, error);
     }
+
+    // Outside the try above: a node on the wrong chain must stop the
+    // service, not just be logged. Checked again while running, in case the
+    // node behind the address is swapped for another.
+    await checkChainIdentity(this.logger, client.symbol, client, network);
+    setInterval(async () => {
+      try {
+        await checkChainIdentity(this.logger, client.symbol, client, network);
+      } catch (error) {
+        if (error instanceof ChainIdentityError) {
+          this.logger.error(`Stopping: ${formatError(error)}`);
+          // eslint-disable-next-line n/no-process-exit
+          process.exit(1);
+        }
+        this.logger.warn(
+          `Could not re-check ${client.symbol} chain identity: ${formatError(error)}`,
+        );
+      }
+    }, chainIdentityRecheckMs).unref();
   };
 
   private connectLightningClient = async (client: LightningClient) => {
