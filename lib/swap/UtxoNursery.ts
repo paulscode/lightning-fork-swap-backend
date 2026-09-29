@@ -794,6 +794,19 @@ class UtxoNursery extends TypedEventEmitter<{
       return;
     }
 
+    // A coinbase cannot be spent for 100 blocks, and on the Bitcoin BLAKE2b
+    // chain no upgraded node relays a spend of one for 6480. Paying against
+    // it would leave the service unable to claim before the swap times out,
+    // while a miner could mine their own refund: refuse it.
+    if (TxView.of(transaction).isCoinbase()) {
+      this.emit('swap.lockup.failed', {
+        swap: updatedSwap,
+        reason: Errors.COINBASE_LOCKUP().message,
+      });
+
+      return;
+    }
+
     if (updatedSwap.expectedAmount) {
       if (updatedSwap.expectedAmount > outputValue) {
         this.emit('swap.lockup.failed', {
