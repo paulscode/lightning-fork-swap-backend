@@ -2731,4 +2731,80 @@ describe('UtxoNursery', () => {
       getOutputValueSpy.mockRestore();
     });
   });
+  describe('lockup confirmation depth', () => {
+    afterEach(() => {
+      nursery['requiredLockupConfirmations'].delete('BTC');
+      nursery['deepLockupsEmitted'].clear();
+    });
+
+    test('should wait with a confirmed lockup until it is deep enough', async () => {
+      nursery['requiredLockupConfirmations'].set('BTC', 3);
+      const transaction = parseTx(sampleTransactions.lockup);
+
+      mockGetSwapResult = {
+        id: 'shallow',
+        expectedAmount: 100214,
+        redeemScript: sampleRedeemScript,
+        lockupAddress: encodeAddress(
+          Buffer.from(transaction.getOutput(0).script!),
+        ),
+      };
+      mockGetRawTransactionVerboseResult = () => ({ confirmations: 2 });
+
+      let emitted = 0;
+      nursery.on('swap.lockup', () => {
+        emitted += 1;
+      });
+
+      await nursery['checkOutputs'](
+        btcChainClient,
+        btcWallet,
+        transaction,
+        TransactionStatus.Confirmed,
+      );
+
+      expect(emitted).toEqual(0);
+      expect(mockSetLockupTransaction).toHaveBeenCalledTimes(1);
+    });
+
+    test('should hand on a waiting lockup once it has enough confirmations, once', async () => {
+      nursery['requiredLockupConfirmations'].set('BTC', 3);
+      const swap = {
+        id: 'waiting',
+        pair: 'BTC/BTC',
+        orderSide: OrderSide.SELL,
+        status: SwapUpdateEvent.TransactionConfirmed,
+        lockupTransactionId: 'txid',
+        lockupTransactionVout: 0,
+      };
+      SwapRepository.getSwaps = jest.fn().mockResolvedValue([swap]);
+
+      const emittedSwaps: string[] = [];
+      nursery.on('swap.lockup', ({ swap, confirmed }) => {
+        expect(confirmed).toEqual(true);
+        emittedSwaps.push(swap.id);
+      });
+
+      mockGetRawTransactionVerboseResult = () => ({
+        confirmations: 2,
+        hex: sampleTransactions.lockup,
+      });
+      await nursery['checkDeepenedLockups'](btcChainClient, btcWallet);
+      expect(emittedSwaps).toEqual([]);
+
+      mockGetRawTransactionVerboseResult = () => ({
+        confirmations: 3,
+        hex: sampleTransactions.lockup,
+      });
+      await nursery['checkDeepenedLockups'](btcChainClient, btcWallet);
+      await nursery['checkDeepenedLockups'](btcChainClient, btcWallet);
+      expect(emittedSwaps).toEqual(['waiting']);
+    });
+
+    test('should not look for waiting lockups when one confirmation is enough', async () => {
+      SwapRepository.getSwaps = jest.fn();
+      await nursery['checkDeepenedLockups'](btcChainClient, btcWallet);
+      expect(SwapRepository.getSwaps).not.toHaveBeenCalled();
+    });
+  });
 });
