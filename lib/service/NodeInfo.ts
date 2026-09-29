@@ -136,11 +136,16 @@ class NodeInfo {
       const oldestChannel = channels.reduce((prev, cur) => {
         return Number(prev.chanId) < Number(cur.chanId) ? prev : cur;
       });
+      // The block the funding transaction confirmed in is the first part of
+      // the short channel id. Its header is kept even by a pruned node, while
+      // the transaction itself may be long gone from one without -txindex.
+      const fundingHeight = Number(BigInt(oldestChannel.chanId) >> 40n);
+      const chainClient = currency.chainClient!;
       oldestChannelBlockTime = (
-        await currency.chainClient!.getRawTransactionVerbose(
-          oldestChannel.fundingTransactionId,
+        await chainClient.getBlockHeader(
+          await chainClient.getBlockhash(fundingHeight),
         )
-      ).blocktime;
+      ).time;
     }
 
     const publicChannels = channels.filter((chan) => !chan.private);
