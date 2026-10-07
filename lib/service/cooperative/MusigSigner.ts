@@ -288,8 +288,28 @@ class MusigSigner {
           SwapNursery.reverseSwapLock,
           'signReverseSwapClaim',
           async () => {
-            if (swap.status !== SwapUpdateEvent.InvoiceSettled) {
-              await this.nursery.settleReverseSwapInvoice(swap, preimage);
+            // Judged again under the lock the refund at the timeout takes:
+            // settling after that refund would take the payment as well
+            const current = await ReverseSwapRepository.getReverseSwap({
+              id: swap.id,
+            });
+            if (
+              current === null ||
+              current === undefined ||
+              ![
+                SwapUpdateEvent.TransactionMempool,
+                SwapUpdateEvent.TransactionConfirmed,
+                SwapUpdateEvent.InvoiceSettled,
+              ].includes(current.status as SwapUpdateEvent)
+            ) {
+              this.logger.warn(
+                `Not settling the invoice of Reverse Swap ${swap.id} for a cooperative claim: it is ${current?.status} now`,
+              );
+              throw Errors.NOT_ELIGIBLE_FOR_COOPERATIVE_CLAIM();
+            }
+
+            if (current.status !== SwapUpdateEvent.InvoiceSettled) {
+              await this.nursery.settleReverseSwapInvoice(current, preimage);
             }
 
             if (toSign === undefined) {

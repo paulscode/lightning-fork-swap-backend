@@ -190,6 +190,27 @@ describe('MusigSigner', () => {
         .mockResolvedValue(reverseSwap);
     });
 
+    test.each`
+      status
+      ${SwapUpdateEvent.TransactionRefunded}
+      ${SwapUpdateEvent.SwapExpired}
+      ${SwapUpdateEvent.TransactionFailed}
+    `(
+      'should not settle when the swap became $status while waiting for the lock',
+      async ({ status }) => {
+        const { nursery, signer } = createSigner();
+        ReverseSwapRepository.getReverseSwap = jest
+          .fn()
+          .mockResolvedValueOnce(reverseSwap)
+          .mockResolvedValue({ ...reverseSwap, status });
+
+        await expect(
+          signer.signReverseSwapClaim(reverseSwap.id, preimage),
+        ).rejects.toEqual(Errors.NOT_ELIGIBLE_FOR_COOPERATIVE_CLAIM());
+        expect(nursery.settleReverseSwapInvoice).not.toHaveBeenCalled();
+      },
+    );
+
     test('should allow preimage-only settlement when cooperative claims are disabled', async () => {
       const { nursery, signer } = createSigner();
 
