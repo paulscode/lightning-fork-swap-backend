@@ -125,28 +125,41 @@ class MusigSigner {
       throw Errors.CURRENCY_NOT_UTXO_BASED();
     }
 
-    await this.validateEligibility(swap);
+    // Under the lock that paying the swap takes, and flagged before
+    // signing: once a refund may be signed, the swap is never paid
+    return this.nursery.lock.acquire(
+      SwapNursery.swapLock,
+      'signRefund',
+      async () => {
+        const current = await SwapRepository.getSwap({ id: swapId });
+        if (!current) {
+          throw Errors.SWAP_NOT_FOUND(swapId);
+        }
 
-    this.logger.debug(
-      `Creating partial signature for refund of Swap ${swap.id}`,
+        await this.validateEligibility(current);
+
+        this.logger.debug(
+          `Creating partial signature for refund of Swap ${current.id}`,
+        );
+
+        await SwapRepository.setRefundSignatureCreated(current.id);
+
+        const swapTree = SwapTreeSerializer.deserializeSwapTree(
+          current.redeemScript!,
+        );
+
+        return await createPartialSignature(
+          currency,
+          this.walletManager.wallets.get(currency.symbol)!,
+          swapTree,
+          current.keyIndex!,
+          getHexBuffer(current.refundPublicKey!),
+          theirNonce,
+          rawTransaction,
+          index,
+        );
+      },
     );
-
-    const swapTree = SwapTreeSerializer.deserializeSwapTree(swap.redeemScript!);
-
-    const sig = await createPartialSignature(
-      currency,
-      this.walletManager.wallets.get(currency.symbol)!,
-      swapTree,
-      swap.keyIndex!,
-      getHexBuffer(swap.refundPublicKey!),
-      theirNonce,
-      rawTransaction,
-      index,
-    );
-
-    await SwapRepository.setRefundSignatureCreated(swap.id);
-
-    return sig;
   };
 
   public signRefundArk = async (
@@ -180,19 +193,30 @@ class MusigSigner {
       );
     }
 
-    await this.validateEligibility(swap);
-    checkArkTransaction(
-      transaction,
-      checkpoint,
-      swap.lockupTransactionId,
-      swap.lockupTransactionVout,
-    );
+    await this.nursery.lock.acquire(
+      SwapNursery.swapLock,
+      'signRefundArk',
+      async () => {
+        const current = await SwapRepository.getSwap({ id: swapId });
+        if (!current) {
+          throw Errors.SWAP_NOT_FOUND(swapId);
+        }
 
-    this.logger.debug(
-      `Creating partial signature for refund of ARK Swap ${swap.id}`,
-    );
+        await this.validateEligibility(current);
+        checkArkTransaction(
+          transaction,
+          checkpoint,
+          current.lockupTransactionId,
+          current.lockupTransactionVout,
+        );
 
-    await SwapRepository.setRefundSignatureCreated(swap.id);
+        this.logger.debug(
+          `Creating partial signature for refund of ARK Swap ${current.id}`,
+        );
+
+        await SwapRepository.setRefundSignatureCreated(current.id);
+      },
+    );
 
     const [transactionSigned, checkpointSigned] = await Promise.all([
       currency.arkNode.signTransaction(transaction),

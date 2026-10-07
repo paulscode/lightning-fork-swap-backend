@@ -1,6 +1,8 @@
 import { sha256 } from '@noble/hashes/sha2.js';
 import { Transaction as ScureTransaction } from '@scure/btc-signer';
+import { SwapTreeSerializer } from 'boltz-core';
 import { randomBytes } from 'crypto';
+import InstrumentedLock from '../../../../lib/InstrumentedLock';
 import Logger from '../../../../lib/Logger';
 import { getHexString } from '../../../../lib/Utils';
 import ArkClient from '../../../../lib/chain/ArkClient';
@@ -26,7 +28,8 @@ import SignerControlRegistry from '../../../../lib/service/SignerControlRegistry
 import MusigSigner, {
   RefundRejectionReason,
 } from '../../../../lib/service/cooperative/MusigSigner';
-import type SwapNursery from '../../../../lib/swap/SwapNursery';
+import * as CoopUtils from '../../../../lib/service/cooperative/Utils';
+import SwapNursery from '../../../../lib/swap/SwapNursery';
 import type WalletManager from '../../../../lib/wallet/WalletManager';
 import type { Currency } from '../../../../lib/wallet/WalletManager';
 
@@ -57,7 +60,11 @@ describe('MusigSigner', () => {
     Logger.disabledLogger,
     currencies,
     {} as unknown as WalletManager,
-    {} as unknown as SwapNursery,
+    {
+      lock: {
+        acquire: jest.fn(async (_lock, _operation, callback) => callback()),
+      },
+    } as unknown as SwapNursery,
   );
 
   beforeEach(() => {
@@ -227,6 +234,143 @@ describe('MusigSigner', () => {
     });
   });
 
+  describe('signRefund', () => {
+    const swapId = 'refund-swap';
+    const failedSwap = {
+      id: swapId,
+      type: SwapType.Submarine,
+      pair: 'BTC/BTC',
+      orderSide: OrderSide.BUY,
+      version: SwapVersion.Taproot,
+      status: SwapUpdateEvent.InvoiceFailedToPay,
+      preimageHash: getHexString(randomBytes(32)),
+      redeemScript: 'tree',
+      keyIndex: 1,
+      refundPublicKey: '02',
+    };
+    const notFound = { code: 5, details: "payment isn't initiated" };
+
+    const refundSigner = () => {
+      const lock = new InstrumentedLock('swapNursery');
+      const lndClient = {
+        id: 'lnd-1',
+        trackPayment: jest.fn().mockRejectedValue(notFound),
+      };
+      const btc = {
+        symbol: 'BTC',
+        chainClient: {},
+        lndClients: new Map([[lndClient.id, lndClient]]),
+      } as unknown as Currency;
+
+      return {
+        lock,
+        refundSigner: new MusigSigner(
+          Logger.disabledLogger,
+          new Map([['BTC', btc]]),
+          { wallets: new Map([['BTC', {}]]) } as unknown as WalletManager,
+          { lock } as unknown as SwapNursery,
+        ),
+      };
+    };
+
+    let calls: string[];
+
+    beforeEach(() => {
+      calls = [];
+      jest
+        .spyOn(SwapTreeSerializer, 'deserializeSwapTree')
+        .mockReturnValue({} as any);
+      jest
+        .spyOn(CoopUtils, 'createPartialSignature')
+        .mockImplementation(async () => {
+          calls.push('sign');
+          return { pubNonce: Buffer.alloc(66), signature: Buffer.alloc(32) };
+        });
+      SwapRepository.setRefundSignatureCreated = jest
+        .fn()
+        .mockImplementation(async () => {
+          calls.push('flag');
+        });
+    });
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    test('should flag the swap before signing', async () => {
+      SwapRepository.getSwap = jest.fn().mockResolvedValue(failedSwap);
+
+      await refundSigner().refundSigner.signRefund(
+        swapId,
+        Buffer.alloc(66),
+        Buffer.alloc(0),
+        0,
+      );
+
+      expect(calls).toEqual(['flag', 'sign']);
+      expect(SwapRepository.setRefundSignatureCreated).toHaveBeenCalledWith(
+        swapId,
+      );
+    });
+
+    test('should wait for the swap lock and judge the swap as it is then', async () => {
+      const { lock, refundSigner: signer } = refundSigner();
+      SwapRepository.getSwap = jest.fn().mockResolvedValue(failedSwap);
+
+      let release!: () => void;
+      const held = lock.acquire(
+        SwapNursery.swapLock,
+        'payInvoice',
+        () => new Promise<void>((resolve) => (release = resolve)),
+      );
+
+      const signing = signer.signRefund(
+        swapId,
+        Buffer.alloc(66),
+        Buffer.alloc(0),
+        0,
+      );
+
+      // While the lock is held, a payment of the swap starts
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(calls).toEqual([]);
+      SwapRepository.getSwap = jest.fn().mockResolvedValue({
+        ...failedSwap,
+        status: SwapUpdateEvent.InvoicePending,
+      });
+      release();
+      await held;
+
+      await expect(signing).rejects.toEqual(
+        Errors.NOT_ELIGIBLE_FOR_COOPERATIVE_REFUND(
+          RefundRejectionReason.StatusNotEligible,
+        ),
+      );
+      expect(calls).toEqual([]);
+    });
+
+    test('should neither flag nor sign an ineligible swap', async () => {
+      SwapRepository.getSwap = jest.fn().mockResolvedValue({
+        ...failedSwap,
+        status: SwapUpdateEvent.TransactionConfirmed,
+      });
+
+      await expect(
+        refundSigner().refundSigner.signRefund(
+          swapId,
+          Buffer.alloc(66),
+          Buffer.alloc(0),
+          0,
+        ),
+      ).rejects.toEqual(
+        Errors.NOT_ELIGIBLE_FOR_COOPERATIVE_REFUND(
+          RefundRejectionReason.StatusNotEligible,
+        ),
+      );
+      expect(calls).toEqual([]);
+    });
+  });
+
   describe('signRefundArk', () => {
     test.each([[null], [undefined]])(
       'should throw when swap cannot be found (%s)',
@@ -295,7 +439,8 @@ describe('MusigSigner', () => {
         ),
       );
 
-      expect(SwapRepository.getSwap).toHaveBeenCalledTimes(1);
+      // Once to find the currency, once more under the lock
+      expect(SwapRepository.getSwap).toHaveBeenCalledTimes(2);
       expect(SwapRepository.getSwap).toHaveBeenCalledWith({ id });
     });
 
