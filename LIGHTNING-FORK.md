@@ -100,6 +100,8 @@ Found by a review of the submarine and reverse swap paths.
      swap in `transaction.confirmed`, and every block re-checks such swaps,
      which also covers restarts and reorganisations.
    - `RefundWatcher` uses the same setting.
+   - An invoice set after the lockup confirmed waits for the same depth
+     (`249566d4`).
    - The public status reads `transaction.mempool` until the lockup is deep
      enough.
 9. **Lockup errors after a broadcast** (`81e862d9`). An error after the
