@@ -17,6 +17,7 @@ import type { LightningClient } from '../../../lib/lightning/LightningClient';
 import NoExistingPaymentActionError from '../../../lib/lightning/NoExistingPaymentActionError';
 import PendingPaymentTracker from '../../../lib/lightning/PendingPaymentTracker';
 import type ClnPendingPaymentTracker from '../../../lib/lightning/paymentTrackers/ClnPendingPaymentTracker';
+import { Payment_PaymentStatus } from '../../../lib/proto/lnd/rpc';
 
 describe('PendingPaymentTracker', () => {
   const paymentTimeoutMinutes = 30;
@@ -579,6 +580,67 @@ describe('PendingPaymentTracker', () => {
 
     afterEach(() => {
       jest.restoreAllMocks();
+    });
+
+    describe('asking lnd before giving up', () => {
+      const oldFailure = () =>
+        ({
+          status: LightningPaymentStatus.TemporaryFailure,
+          createdAt: new Date(
+            Date.now() - minutesToMilliseconds(paymentTimeoutMinutes + 5),
+          ),
+        }) as LightningPayment;
+      const lndWith = (trackPayment: jest.Mock) =>
+        ({
+          id: nodeId,
+          type: NodeType.LND,
+          serviceName: () => 'LND',
+          trackPayment,
+        }) as unknown as LightningClient;
+
+      test.each`
+        description             | trackPayment
+        ${'in flight'}          | ${jest.fn().mockResolvedValue({ status: Payment_PaymentStatus.IN_FLIGHT })}
+        ${'succeeded'}          | ${jest.fn().mockResolvedValue({ status: Payment_PaymentStatus.SUCCEEDED })}
+        ${'unknown (lnd down)'} | ${jest.fn().mockRejectedValue({ code: 14, details: 'unavailable' })}
+      `(
+        'should not give up on a payment that is $description',
+        async ({ trackPayment }) => {
+          await expect(
+            tracker['checkInvoiceTimeout'](
+              { id: swapId },
+              paymentHash,
+              nodeId,
+              [oldFailure()],
+              lndWith(trackPayment),
+            ),
+          ).resolves.toBeUndefined();
+
+          expect(LightningPaymentRepository.setStatus).not.toHaveBeenCalled();
+        },
+      );
+
+      test.each`
+        description          | trackPayment
+        ${'failed'}          | ${jest.fn().mockResolvedValue({ status: Payment_PaymentStatus.FAILED })}
+        ${'never initiated'} | ${jest.fn().mockRejectedValue({ code: 5, details: "payment isn't initiated" })}
+      `(
+        'should give up on a payment that $description',
+        async ({ trackPayment }) => {
+          await expect(
+            tracker['checkInvoiceTimeout'](
+              { id: swapId },
+              paymentHash,
+              nodeId,
+              [oldFailure()],
+              lndWith(trackPayment),
+            ),
+          ).rejects.toEqual(expectedError);
+
+          expect(trackPayment).toHaveBeenCalledWith(getHexBuffer(paymentHash));
+          expect(LightningPaymentRepository.setStatus).toHaveBeenCalledTimes(1);
+        },
+      );
     });
 
     test('should not time out when there are no payments', async () => {

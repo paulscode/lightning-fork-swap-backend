@@ -1,3 +1,4 @@
+import { status as grpcStatus } from '@grpc/grpc-js';
 import type Logger from '../Logger';
 import { racePromise } from '../PromiseUtils';
 import {
@@ -15,6 +16,7 @@ import { NodeType } from '../db/models/ReverseSwap';
 import type Swap from '../db/models/Swap';
 import LightningPaymentRepository from '../db/repositories/LightningPaymentRepository';
 import ReferralRepository from '../db/repositories/ReferralRepository';
+import { Payment_PaymentStatus } from '../proto/lnd/rpc';
 import type Sidecar from '../sidecar/Sidecar';
 import { type Currency, getLightningClientById } from '../wallet/WalletManager';
 import LightningErrors from './Errors';
@@ -223,6 +225,7 @@ class PendingPaymentTracker {
       paymentHash,
       lightningClient.id,
       payments,
+      lightningClient,
     );
 
     return await this.sendPaymentWithNode(
@@ -239,6 +242,7 @@ class PendingPaymentTracker {
     paymentHash: string,
     lightningClientId: string,
     payments: LightningPayment[],
+    lightningClient?: LightningClient,
   ) => {
     // Prefer the payment timeout from the swap, if it exists
     const timeout =
@@ -256,6 +260,19 @@ class PendingPaymentTracker {
     }
 
     if (Date.now() - Math.min(...relevantTimestamps) > timeout) {
+      // A temporary failure can be an error of the call while the node still
+      // has the payment in flight; giving up on the swap then would allow
+      // its refund while the payment can still succeed
+      if (
+        lightningClient !== undefined &&
+        !(await this.nodeHasNoLivePayment(lightningClient, paymentHash))
+      ) {
+        this.logger.warn(
+          `Payment for ${swap.id} (${paymentHash}) has timed out, but ${lightningClient.serviceName()} ${lightningClient.id} may still have it in flight; not giving up on it`,
+        );
+        return;
+      }
+
       this.logger.warn(`Payment for ${swap.id} (${paymentHash}) has timed out`);
 
       const err = LightningErrors.PAYMENT_TIMED_OUT();
@@ -266,6 +283,28 @@ class PendingPaymentTracker {
         err.message,
       );
       throw err.message;
+    }
+  };
+
+  /**
+   * Whether the node says it has no payment for the hash that could still
+   * succeed: none at all, or one that failed. Only lnd can be asked.
+   */
+  private nodeHasNoLivePayment = async (
+    lightningClient: LightningClient,
+    paymentHash: string,
+  ): Promise<boolean> => {
+    if (lightningClient.type !== NodeType.LND) {
+      return true;
+    }
+
+    try {
+      const payment = await (lightningClient as LndClient).trackPayment(
+        getHexBuffer(paymentHash),
+      );
+      return payment.status === Payment_PaymentStatus.FAILED;
+    } catch (error) {
+      return (error as { code?: unknown })?.code === grpcStatus.NOT_FOUND;
     }
   };
 
