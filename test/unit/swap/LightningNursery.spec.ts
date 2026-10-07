@@ -396,9 +396,9 @@ describe('LightningNursery', () => {
 
     expect(eventsEmitted).toEqual(2);
 
-    // Once for the HTLC expiry when the hold invoice is accepted, once after
-    // the prepay
-    expect(mockLookupHoldInvoice).toHaveBeenCalledTimes(2);
+    // For the HTLC expiry when the hold invoice is accepted; after the
+    // prepay for the state of the hold invoice, and its HTLC expiry again
+    expect(mockLookupHoldInvoice).toHaveBeenCalledTimes(3);
     expect(mockLookupHoldInvoice).toHaveBeenCalledWith(
       decodeInvoice(invoice).paymentHash,
     );
@@ -415,6 +415,42 @@ describe('LightningNursery', () => {
       mockGetReverseSwapResult,
       SwapUpdateEvent.MinerFeePaid,
     );
+  });
+
+  test('should check the HTLC expiry again when the prepay comes after the hold invoice', async () => {
+    const paid = jest.fn();
+    nursery.on('invoice.paid', paid);
+
+    mockGetReverseSwapResult = {
+      id: 'prepay',
+      invoice,
+      preimageHash,
+      timeoutBlockHeight,
+      minerFeeInvoice,
+      minerFeeInvoicePreimage,
+    };
+    mockLookupHoldInvoiceState = Invoice_InvoiceState.ACCEPTED;
+    // Too early by one block
+    mockHtlcs = [
+      {
+        state: HtlcState.Accepted,
+        expiryHeight:
+          timeoutBlockHeight +
+          LightningNursery.holdExpiryDelta +
+          LightningNursery.refundConfirmationMargin -
+          1,
+      },
+    ];
+
+    await emitHtlcAccepted(minerFeeInvoice);
+
+    expect(mockCancelHoldInvoice).toHaveBeenCalledWith(
+      getHexBuffer(preimageHash),
+    );
+    expect(mockSettleHoldInvoice).not.toHaveBeenCalled();
+    expect(paid).not.toHaveBeenCalled();
+
+    mockHtlcs = [];
   });
 
   test('should handle htlc.accepted event sequentially', async () => {
