@@ -172,7 +172,11 @@ where
     S: SwapInfos + Send + Sync + Clone + 'static,
     M: SwapManager + Send + Sync + 'static,
 {
-    let res = state.service.swap_rescue.rescue(params.try_into()?)?;
+    let iterator: Box<dyn PubkeyIterator + Send> = params.try_into()?;
+    // The scan runs synchronous database queries; off the async workers
+    let res = tokio::task::spawn_blocking(move || state.service.swap_rescue.rescue(iterator))
+        .await
+        .map_err(|e| AxumError::new(StatusCode::INTERNAL_SERVER_ERROR, e.into()))??;
     Ok((StatusCode::OK, Json(res)).into_response())
 }
 
@@ -184,7 +188,10 @@ where
     S: SwapInfos + Send + Sync + Clone + 'static,
     M: SwapManager + Send + Sync + 'static,
 {
-    let res = state.service.swap_rescue.restore(params.try_into()?)?;
+    let query: RestoreQuery = params.try_into()?;
+    let res = tokio::task::spawn_blocking(move || state.service.swap_rescue.restore(query))
+        .await
+        .map_err(|e| AxumError::new(StatusCode::INTERNAL_SERVER_ERROR, e.into()))??;
     Ok((StatusCode::OK, Json(res)).into_response())
 }
 

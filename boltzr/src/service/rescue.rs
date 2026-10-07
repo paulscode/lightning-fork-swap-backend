@@ -6,7 +6,7 @@ use crate::db::helpers::swap_metadata::SwapMetadataHelper;
 use crate::db::models::{
     ChainSwapData, ChainSwapInfo, LightningSwap, ReverseSwap, SomeSwap, Swap, SwapType,
 };
-use crate::service::pubkey_iterator::{Pagination, PubkeyIterator};
+use crate::service::pubkey_iterator::{MAX_GAP_LIMIT, Pagination, PubkeyIterator};
 use crate::wallet::Wallet;
 use anyhow::{Result, anyhow};
 use bitcoin::secp256k1;
@@ -793,6 +793,14 @@ impl SwapRescue {
             _ => (start_index.unwrap_or(0), iterator.max_keys()),
         };
 
+        // A page is scanned whole, so the window only sets how many queries
+        // that takes; a gap limit of 1 must not turn a page into one query
+        // per key
+        let window = match pagination {
+            Some(_) => std::cmp::max(gap_limit, MAX_GAP_LIMIT),
+            None => gap_limit,
+        };
+
         debug!(
             "Starting scan from key index {} to {} for {}",
             scan_start,
@@ -800,8 +808,8 @@ impl SwapRescue {
             iterator.identifier()
         );
 
-        for from in (scan_start..scan_end).step_by(gap_limit as usize) {
-            let to = std::cmp::min(from + gap_limit, scan_end);
+        for from in (scan_start..scan_end).step_by(window as usize) {
+            let to = std::cmp::min(from.saturating_add(window), scan_end);
 
             trace!(
                 "Scanning for swaps from key index {} to {} for {}",
@@ -1726,6 +1734,47 @@ swapTree: Some(tree.clone()),
         );
     }
 
+    #[tokio::test]
+    async fn test_restore_page_with_gap_limit_one_scans_in_wide_windows() {
+        // 300 keys in windows of MAX_GAP_LIMIT: 2 queries per swap type,
+        // not 300
+        let mut swap_helper = MockSwapHelper::new();
+        swap_helper
+            .expect_get_all_nullable()
+            .returning(|_| Ok(vec![]))
+            .times(2);
+        let mut chain_helper = MockChainSwapHelper::new();
+        chain_helper
+            .expect_get_by_data_nullable()
+            .returning(|_| Ok(vec![]))
+            .times(2);
+        let mut reverse_helper = MockReverseSwapHelper::new();
+        reverse_helper
+            .expect_get_all_nullable()
+            .returning(|_| Ok(vec![]))
+            .times(2);
+
+        let rescue = SwapRescue::new(
+            Cache::Memory(MemCache::new()),
+            Arc::new(swap_helper),
+            Arc::new(chain_helper),
+            Arc::new(reverse_helper),
+            Arc::new(HashMap::new()),
+            Arc::new(MockSwapMetadataHelper::new()),
+        );
+        let xpub = Xpub::from_str("xpub661MyMwAqRbcGXPykvqCkK3sspTv2iwWTYpY9gBewku5Noj96ov1EqnKMDzGN9yPsncpRoUymJ7zpJ7HQiEtEC9Af2n3DmVu36TSV4oaiym").unwrap();
+        let res = rescue
+            .restore(RestoreQuery::Keys(Box::new(
+                XpubIterator::new(xpub, None, Some(1))
+                    .unwrap()
+                    .with_pagination(Some(Pagination {
+                        start_index: 0,
+                        limit: 300,
+                    })),
+            )))
+            .unwrap();
+        assert!(res.is_empty());
+    }
     #[tokio::test]
     async fn test_restore_single_key() {
         let tree = get_test_tree();
