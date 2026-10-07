@@ -3269,6 +3269,51 @@ describe('SwapNursery', () => {
     });
   });
 
+  describe('server.lockup.confirmed of a reverse swap', () => {
+    const emitConfirmed = async (status: SwapUpdateEvent) => {
+      const reverseSwap = {
+        id: 'reverse-confirmed',
+        type: SwapType.ReverseSubmarine,
+        status,
+      } as unknown as ReverseSwap;
+      jest
+        .spyOn(ReverseSwapRepository, 'getReverseSwap')
+        .mockResolvedValue(reverseSwap);
+      (WrappedSwapRepository.setStatus as jest.Mock).mockClear();
+
+      await swapNursery.init([mockCurrency]);
+      (swapNursery as any).utxoNursery.emit('server.lockup.confirmed', {
+        swap: reverseSwap,
+        transaction: {},
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      return reverseSwap;
+    };
+
+    test.each`
+      status
+      ${SwapUpdateEvent.TransactionRefunded}
+      ${SwapUpdateEvent.SwapExpired}
+      ${SwapUpdateEvent.TransactionFailed}
+    `('should keep $status', async ({ status }) => {
+      await emitConfirmed(status);
+
+      expect(WrappedSwapRepository.setStatus).not.toHaveBeenCalled();
+    });
+
+    test('should move transaction.mempool to transaction.confirmed', async () => {
+      const reverseSwap = await emitConfirmed(
+        SwapUpdateEvent.TransactionMempool,
+      );
+
+      expect(WrappedSwapRepository.setStatus).toHaveBeenCalledWith(
+        reverseSwap,
+        SwapUpdateEvent.TransactionConfirmed,
+      );
+    });
+  });
+
   describe('attemptSettleSwap idempotency', () => {
     const mockPreimage = Buffer.from('preimage');
 

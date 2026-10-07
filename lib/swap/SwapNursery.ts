@@ -40,6 +40,7 @@ import type { IChainClient } from '../chain/ChainClient';
 import { LegacyReverseSwapOutputType, etherDecimals } from '../consts/Consts';
 import {
   CurrencyType,
+  FailedSwapUpdateEvents,
   FinalChainSwapEvents,
   SuccessSwapUpdateEvents,
   SwapType,
@@ -577,6 +578,15 @@ class SwapNursery extends TypedEventEmitter<SwapNurseryEvents> {
           ) {
             this.logger.debug(
               `Not acting on confirmed server lockup transaction of ${swapTypeToPrettyString(swap.type)} Swap ${swap.id} because it is being claimed already`,
+            );
+            return;
+          }
+
+          // A lockup that confirms in the block in which it times out, or
+          // after the swap failed, must not undo its refund or expiry
+          if (FailedSwapUpdateEvents.includes(swap.status as SwapUpdateEvent)) {
+            this.logger.warn(
+              `Not acting on confirmed server lockup transaction of ${swapTypeToPrettyString(swap.type)} Swap ${swap.id} because it is ${swap.status} already`,
             );
             return;
           }
