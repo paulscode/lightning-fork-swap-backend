@@ -110,6 +110,44 @@ Found by a review of the submarine and reverse swap paths.
    - `CoreWalletProvider` now reports a node refusal as `NotBroadcastError`.
    - Only that, or an error before sending, fails the swap. Anything else
      leaves the invoice held and logs an error naming the wallet label.
+   - Only an error the node itself replied with counts as a refusal
+     (`60ffb9fc`): `RpcClient` marks the JSON-RPC errors it parsed.
+10. **A reverse lockup is never sent twice** (`235a5d5a`, `c3b1bdf8`). A
+    lockup sent before an error kept it out of the database left the swap
+    in `swap.created`, so the next time the held invoice was seen (on
+    restart at the latest) it was sent again, to the same address, where
+    one preimage claims both.
+    - Before sending, `lockupUtxo` asks the wallet whether it already paid
+      the lockup address (`CoreWalletProvider.findSend`, from
+      `listtransactions`) and records that payment instead. When the wallet
+      cannot answer, it neither sends nor fails the swap.
+    - Such a swap is asked about on every block: a lockup the wallet sent
+      is recorded, so the claim is seen and settles the invoice; one it
+      still has not sent 30 minutes after the error fails the swap.
+    - At its timeout a reverse swap without a recorded lockup is looked up
+      in the wallet too, and a lockup found is refunded.
+11. **A lockup is checked again before it is paid against** (`7fd6dfa6`).
+    `checkDeepenedLockups` (item 8) handed on swaps by their status, which
+    is written before the lockup's checks fail. It now re-runs the checks
+    (coinbase, amount) on the transaction, and the `swap.lockup` handler
+    refuses swaps in a failed state.
+12. **Smaller fixes from the same review**:
+    - the prepay miner fee path checks HTLC expiries too (`4e3b47a0`);
+    - a cooperative refund is refused while lnd cannot rule out a payment,
+      or when the database records one as made (`e6b0d33a`);
+    - the refund signature flag is set under the swap lock, before signing
+      (`0a08d386`);
+    - a reverse lockup confirming late does not undo a refund or expiry
+      (`3a6a89c9`);
+    - a timed out payment is given up only once lnd says it failed
+      (`a1777745`);
+    - the backend refuses an lnd without feature bit 512/513 on mainnet
+      (`544051a1`);
+    - swap ids come from a CSPRNG (`9632e67b`);
+    - a paginated restore scans in windows of 150 keys, off the async
+      workers (`fd76d116`);
+    - a cooperative claim settles the invoice only while the swap can still
+      be claimed (`6bc3783f`).
 
 ## Configuration this fork expects
 
@@ -157,7 +195,8 @@ docker build -f docker/boltz/Dockerfile --build-arg NODE_VERSION=24-bookworm-sli
 ```
 
 - The Rust tests link against `libpq`. `PQ_LIB_DIR` can point at a copy.
-- The full TypeScript unit suite (119 suites) passes on `81e862d9`.
+- The full TypeScript unit suite (120 suites, 2,740 tests) passes on
+  `6bc3783f`, with tsc and eslint clean.
 - The Rust tests for the changed modules pass.
 - The full Rust suite needs Postgres and the regtest services, and has not
   been run on this fork.
