@@ -51,6 +51,9 @@ import { Action } from './hooks/CreationHook';
 import type TransactionHook from './hooks/TransactionHook';
 
 class UtxoNursery extends TypedEventEmitter<{
+  // A block, once the checks it triggers are done
+  block: { symbol: string; height: number };
+
   // Swap
   'swap.expired': Swap;
   'swap.lockup.failed': { swap: Swap; reason: string };
@@ -562,6 +565,8 @@ class UtxoNursery extends TypedEventEmitter<{
         this.checkExpiredReverseSwaps(chainClient, height),
         this.checkExpiredChainSwaps(chainClient, height),
       ]);
+
+      this.emit('block', { symbol, height });
     });
   };
 
