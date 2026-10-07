@@ -2731,6 +2731,7 @@ describe('UtxoNursery', () => {
       getOutputValueSpy.mockRestore();
     });
   });
+
   describe('lockup confirmation depth', () => {
     afterEach(() => {
       nursery['requiredLockupConfirmations'].delete('BTC');
@@ -2799,6 +2800,52 @@ describe('UtxoNursery', () => {
       await nursery['checkDeepenedLockups'](btcChainClient, btcWallet);
       await nursery['checkDeepenedLockups'](btcChainClient, btcWallet);
       expect(emittedSwaps).toEqual(['waiting']);
+    });
+
+    test('should forget handed on swaps once they have moved on', async () => {
+      nursery['requiredLockupConfirmations'].set('BTC', 3);
+      nursery['deepLockupsEmitted'].add('paid');
+      SwapRepository.getSwaps = jest.fn().mockResolvedValue([]);
+
+      await nursery['checkDeepenedLockups'](btcChainClient, btcWallet);
+
+      expect(nursery['deepLockupsEmitted'].has('paid')).toEqual(false);
+    });
+
+    test.each`
+      confirmations | deep
+      ${2}          | ${false}
+      ${3}          | ${true}
+    `(
+      'should tell whether a lockup is deep enough with $confirmations confirmations',
+      async ({ confirmations, deep }) => {
+        nursery['requiredLockupConfirmations'].set('BTC', 3);
+        nursery['deepLockupsEmitted'].add('late-invoice');
+        mockGetRawTransactionVerboseResult = () => ({ confirmations });
+
+        await expect(
+          nursery.lockupIsDeepEnough(btcChainClient, {
+            id: 'late-invoice',
+            lockupTransactionId: 'txid',
+          } as any),
+        ).resolves.toEqual(deep);
+
+        // A swap that is not deep enough is left for checkDeepenedLockups
+        expect(nursery['deepLockupsEmitted'].has('late-invoice')).toEqual(deep);
+      },
+    );
+
+    test('should treat any lockup as deep enough when one confirmation is enough', async () => {
+      mockGetRawTransactionVerboseResult = () => {
+        throw new Error('should not be asked');
+      };
+
+      await expect(
+        nursery.lockupIsDeepEnough(btcChainClient, {
+          id: 'one',
+          lockupTransactionId: 'txid',
+        } as any),
+      ).resolves.toEqual(true);
     });
 
     test('should not look for waiting lockups when one confirmation is enough', async () => {

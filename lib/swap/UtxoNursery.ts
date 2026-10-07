@@ -631,6 +631,39 @@ class UtxoNursery extends TypedEventEmitter<{
   };
 
   /**
+   * Whether a submarine swap's confirmed lockup has the confirmations its
+   * chain requires. A swap whose invoice is set after its lockup confirmed is
+   * paid right away, so that path asks here first.
+   */
+  public lockupIsDeepEnough = async (
+    chainClient: IChainClient,
+    swap: Swap,
+  ): Promise<boolean> => {
+    const required =
+      this.requiredLockupConfirmations.get(chainClient.symbol) ?? 1;
+    if (required <= 1) {
+      return true;
+    }
+
+    try {
+      const { confirmations } = await chainClient.getRawTransactionVerbose(
+        swap.lockupTransactionId!,
+      );
+      if ((confirmations ?? 0) >= required) {
+        return true;
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Could not check the confirmations of the lockup of Swap ${swap.id}: ${formatError(error)}`,
+      );
+    }
+
+    // checkDeepenedLockups hands it on once it is deep enough
+    this.deepLockupsEmitted.delete(swap.id);
+    return false;
+  };
+
+  /**
    * Hands on the lockups of submarine swaps that were waiting for more
    * confirmations and now have them. The swaps are found by status, so this
    * also picks up swaps that were waiting when the service restarted.
@@ -647,6 +680,14 @@ class UtxoNursery extends TypedEventEmitter<{
     const waiting = await SwapRepository.getSwaps({
       status: SwapUpdateEvent.TransactionConfirmed,
     });
+
+    // Forget the swaps that have moved on
+    const waitingIds = new Set(waiting.map((swap) => swap.id));
+    for (const id of this.deepLockupsEmitted) {
+      if (!waitingIds.has(id)) {
+        this.deepLockupsEmitted.delete(id);
+      }
+    }
 
     for (const swap of waiting) {
       const { base, quote } = splitPairId(swap.pair);
