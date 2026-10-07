@@ -67,6 +67,9 @@ const makeKeys = () => {
 };
 
 jest.mock('../../../../lib/db/repositories/ChainTipRepository');
+jest.mock('../../../../lib/db/repositories/LightningPaymentRepository', () => ({
+  findByPreimageHash: jest.fn().mockResolvedValue([]),
+}));
 jest.mock('../../../../lib/db/repositories/ReverseSwapRepository');
 
 jest.mock('../../../../lib/db/repositories/SwapRepository', () => ({

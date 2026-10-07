@@ -1,3 +1,4 @@
+import { status as grpcStatus } from '@grpc/grpc-js';
 import { SwapTreeSerializer } from 'boltz-core';
 import InstrumentedLock from '../../InstrumentedLock';
 import type Logger from '../../Logger';
@@ -17,9 +18,11 @@ import {
   currencyTypeToString,
   swapTypeToPrettyString,
 } from '../../consts/Enums';
+import { LightningPaymentStatus } from '../../db/models/LightningPayment';
 import { RefundStatus } from '../../db/models/RefundTransaction';
 import type Swap from '../../db/models/Swap';
 import type { ChainSwapInfo } from '../../db/repositories/ChainSwapRepository';
+import LightningPaymentRepository from '../../db/repositories/LightningPaymentRepository';
 import RefundTransactionRepository from '../../db/repositories/RefundTransactionRepository';
 import ReverseSwapRepository from '../../db/repositories/ReverseSwapRepository';
 import SwapRepository from '../../db/repositories/SwapRepository';
@@ -388,6 +391,18 @@ class MusigSigner {
       return false;
     }
 
+    // Whatever the nodes say now, a payment recorded as made rules it out
+    const payments = await LightningPaymentRepository.findByPreimageHash(
+      swap.preimageHash,
+    );
+    if (
+      payments.some(
+        (payment) => payment.status === LightningPaymentStatus.Success,
+      )
+    ) {
+      return true;
+    }
+
     for (const client of currency.lndClients.values()) {
       try {
         const pendingPayment = await client.trackPayment(
@@ -396,8 +411,12 @@ class MusigSigner {
         if (pendingPayment.status !== Payment_PaymentStatus.FAILED) {
           return true;
         }
-      } catch {
-        /* empty */
+      } catch (error) {
+        // Only "payment isn't initiated" means there is none; a node that
+        // cannot answer might have one in flight
+        if ((error as { code?: unknown })?.code !== grpcStatus.NOT_FOUND) {
+          return true;
+        }
       }
     }
 

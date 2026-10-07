@@ -7,15 +7,20 @@ import ArkClient from '../../../../lib/chain/ArkClient';
 import {
   CurrencyType,
   OrderSide,
+  SwapType,
   SwapUpdateEvent,
   SwapVersion,
 } from '../../../../lib/consts/Enums';
+import { LightningPaymentStatus } from '../../../../lib/db/models/LightningPayment';
+import type Swap from '../../../../lib/db/models/Swap';
+import LightningPaymentRepository from '../../../../lib/db/repositories/LightningPaymentRepository';
 import ReverseSwapRepository from '../../../../lib/db/repositories/ReverseSwapRepository';
 import SwapRepository from '../../../../lib/db/repositories/SwapRepository';
 import WrappedSwapRepository from '../../../../lib/db/repositories/WrappedSwapRepository';
 import type LndClient from '../../../../lib/lightning/LndClient';
 import type ClnClient from '../../../../lib/lightning/cln/ClnClient';
 import { Signer } from '../../../../lib/proto/boltzrpc';
+import { Payment_PaymentStatus } from '../../../../lib/proto/lnd/rpc';
 import Errors from '../../../../lib/service/Errors';
 import SignerControlRegistry from '../../../../lib/service/SignerControlRegistry';
 import MusigSigner, {
@@ -58,6 +63,85 @@ describe('MusigSigner', () => {
   beforeEach(() => {
     (signerControlRegistry as any)['disabledSigners'].clear();
     (signerControlRegistry as any)['repository'] = undefined;
+    LightningPaymentRepository.findByPreimageHash = jest
+      .fn()
+      .mockResolvedValue([]);
+  });
+
+  describe('refundNonEligibilityReason', () => {
+    const swap = {
+      type: SwapType.Submarine,
+      version: SwapVersion.Taproot,
+      status: SwapUpdateEvent.InvoiceFailedToPay,
+      preimageHash: getHexString(randomBytes(32)),
+    } as unknown as Swap;
+
+    const currencyWith = (trackPayment: jest.Mock) =>
+      ({
+        lndClients: new Map([['lnd-1', { id: 'lnd-1', trackPayment }]]),
+      }) as unknown as Currency;
+
+    test.each`
+      description                  | trackPayment                                                                    | reason
+      ${'a failed payment'}        | ${jest.fn().mockResolvedValue({ status: Payment_PaymentStatus.FAILED })}        | ${undefined}
+      ${'no payment'}              | ${jest.fn().mockRejectedValue({ code: 5, details: "payment isn't initiated" })} | ${undefined}
+      ${'a payment in flight'}     | ${jest.fn().mockResolvedValue({ status: Payment_PaymentStatus.IN_FLIGHT })}     | ${RefundRejectionReason.LightningPaymentPending}
+      ${'a successful payment'}    | ${jest.fn().mockResolvedValue({ status: Payment_PaymentStatus.SUCCEEDED })}     | ${RefundRejectionReason.LightningPaymentPending}
+      ${'lnd unavailable'}         | ${jest.fn().mockRejectedValue({ code: 14, details: 'Connection dropped' })}     | ${RefundRejectionReason.LightningPaymentPending}
+      ${'an error without a code'} | ${jest.fn().mockRejectedValue(new Error('timeout'))}                            | ${RefundRejectionReason.LightningPaymentPending}
+    `(
+      'should give $reason for $description',
+      async ({ trackPayment, reason }) => {
+        await expect(
+          MusigSigner.refundNonEligibilityReason(
+            swap,
+            currencyWith(trackPayment),
+          ),
+        ).resolves.toEqual(reason);
+      },
+    );
+
+    test('should refuse when a successful payment is recorded, whatever lnd says', async () => {
+      LightningPaymentRepository.findByPreimageHash = jest
+        .fn()
+        .mockResolvedValue([
+          { status: LightningPaymentStatus.PermanentFailure },
+          { status: LightningPaymentStatus.Success },
+        ]);
+      const trackPayment = jest
+        .fn()
+        .mockRejectedValue({ code: 5, details: "payment isn't initiated" });
+
+      await expect(
+        MusigSigner.refundNonEligibilityReason(
+          swap,
+          currencyWith(trackPayment),
+        ),
+      ).resolves.toEqual(RefundRejectionReason.LightningPaymentPending);
+      expect(
+        LightningPaymentRepository.findByPreimageHash,
+      ).toHaveBeenCalledWith(swap.preimageHash);
+    });
+
+    test('should not refuse for failed payments that are recorded', async () => {
+      LightningPaymentRepository.findByPreimageHash = jest
+        .fn()
+        .mockResolvedValue([
+          { status: LightningPaymentStatus.PermanentFailure },
+          { status: LightningPaymentStatus.TemporaryFailure },
+        ]);
+
+      await expect(
+        MusigSigner.refundNonEligibilityReason(
+          swap,
+          currencyWith(
+            jest
+              .fn()
+              .mockResolvedValue({ status: Payment_PaymentStatus.FAILED }),
+          ),
+        ),
+      ).resolves.toEqual(undefined);
+    });
   });
 
   describe('signReverseSwapClaim', () => {
