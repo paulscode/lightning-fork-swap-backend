@@ -151,6 +151,25 @@ describe('Utils', () => {
     expect(utils.generateId(random).length).toEqual(random);
   });
 
+  test('should generate ids from a CSPRNG over the whole alphabet', () => {
+    const mathRandom = jest.spyOn(Math, 'random');
+    const seen = new Set<string>();
+    for (let i = 0; i < 200; i++) {
+      for (const char of utils.generateId(12)) {
+        seen.add(char);
+      }
+    }
+
+    expect(mathRandom).not.toHaveBeenCalled();
+    // 2,400 draws from 57 characters miss one with odds of about 1e-16
+    expect([...seen].sort().join('')).toEqual(
+      [...'ABCDEFGHIJKLMNPQRSTUVWXYZabcdefghkmnopqrstuvwxyz123456789']
+        .sort()
+        .join(''),
+    );
+    mathRandom.mockRestore();
+  });
+
   test('should get pair ids', () => {
     pairId = utils.getPairId(pair);
     expect(pairId).toEqual('BTC/LTC');

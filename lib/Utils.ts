@@ -2,7 +2,7 @@ import { sha256 } from '@noble/hashes/sha2.js';
 import { hexToBytes } from '@noble/hashes/utils.js';
 import { Transaction as ScureTransaction } from '@scure/btc-signer';
 import { OutputType, Scripts } from 'boltz-core';
-import { randomBytes } from 'crypto';
+import { randomBytes, randomInt } from 'crypto';
 import type {
   ContractTransactionResponse,
   TransactionReceipt,
@@ -44,9 +44,8 @@ export const generateId = (length = 6): string => {
   let id = '';
 
   for (let i = 0; i < length; i += 1) {
-    id += idPossibilities.charAt(
-      Math.floor(Math.random() * idPossibilities.length),
-    );
+    // Unpredictable: an id is enough to read a swap's status and details
+    id += idPossibilities.charAt(randomInt(idPossibilities.length));
   }
 
   return id;
