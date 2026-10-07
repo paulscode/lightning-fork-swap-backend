@@ -17,6 +17,7 @@ import {
   ChainIdentityError,
   chainIdentityRecheckMs,
   checkChainIdentity,
+  checkLightningChainIdentity,
 } from './chain/ChainIdentity';
 import ElementsClient from './chain/ElementsClient';
 import {
@@ -33,7 +34,7 @@ import ReferralRepository from './db/repositories/ReferralRepository';
 import GrpcServer from './grpc/GrpcServer';
 import GrpcService from './grpc/GrpcService';
 import JwtSigner from './grpc/JwtSigner';
-import type { LightningClient } from './lightning/LightningClient';
+import type { LightningClient, NodeInfo } from './lightning/LightningClient';
 import LndClient from './lightning/LndClient';
 import RoutingFee from './lightning/RoutingFee';
 import ClnClient from './lightning/cln/ClnClient';
@@ -375,7 +376,12 @@ class Boltz {
       );
 
       await Promise.all(
-        configuredLnds.map(({ client }) => this.connectLightningClient(client)),
+        configuredLnds.map(({ client, currency }) =>
+          this.connectLightningClient(
+            client,
+            currency.network as BitcoinNetwork | undefined,
+          ),
+        ),
       );
 
       // Register in config order so "primary LND" selection stays deterministic.
@@ -539,13 +545,17 @@ class Boltz {
     }, chainIdentityRecheckMs).unref();
   };
 
-  private connectLightningClient = async (client: LightningClient) => {
+  private connectLightningClient = async (
+    client: LightningClient,
+    network?: BitcoinNetwork,
+  ) => {
     const service = `${client.symbol} ${client.serviceName()}`;
+    let info: NodeInfo | undefined;
 
     try {
       await client.connect();
 
-      const info = await client.getInfo();
+      info = await client.getInfo();
       VersionCheck.checkLightningVersion(
         client.serviceName(),
         client.symbol,
@@ -567,6 +577,16 @@ class Boltz {
       this.logStatus(service, info);
     } catch (error) {
       this.logCouldNotConnect(service, error);
+    }
+
+    // Outside the try above, like the chain identity check: an lnd on the
+    // other chain must stop the service, not just be logged
+    if (
+      info !== undefined &&
+      network !== undefined &&
+      client instanceof LndClient
+    ) {
+      checkLightningChainIdentity(this.logger, service, info.features, network);
     }
   };
 

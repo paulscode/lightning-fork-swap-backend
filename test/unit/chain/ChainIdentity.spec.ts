@@ -4,6 +4,7 @@ import {
   ChainIdentityError,
   blake2bActivation,
   checkChainIdentity,
+  checkLightningChainIdentity,
 } from '../../../lib/chain/ChainIdentity';
 import { resolveBitcoinNetwork } from '../../../lib/consts/BitcoinNetworks';
 
@@ -87,5 +88,53 @@ describe('ChainIdentity', () => {
       ),
     ).resolves.toBeUndefined();
     expect(c.getBlockchainInfo).not.toHaveBeenCalled();
+  });
+
+  describe('checkLightningChainIdentity', () => {
+    test.each`
+      description             | features
+      ${'bit 512 (required)'} | ${[0, 5, 512, 515]}
+      ${'bit 513 (optional)'} | ${[513]}
+    `('should accept a mainnet node with $description', ({ features }) => {
+      expect(() =>
+        checkLightningChainIdentity(
+          Logger.disabledLogger,
+          'BTC LND',
+          features,
+          Networks.bitcoinMainnet,
+        ),
+      ).not.toThrow();
+    });
+
+    test.each`
+      description                 | features
+      ${'no BLAKE2b feature bit'} | ${[0, 5, 9, 14, 17]}
+      ${'no features'}            | ${[]}
+      ${'unreported features'}    | ${undefined}
+    `('should refuse a mainnet node with $description', ({ features }) => {
+      expect(() =>
+        checkLightningChainIdentity(
+          Logger.disabledLogger,
+          'BTC LND',
+          features,
+          Networks.bitcoinMainnet,
+        ),
+      ).toThrow(
+        new ChainIdentityError(
+          'BTC LND does not advertise feature bit 512 or 513: it is not a Lightning node of the Bitcoin BLAKE2b chain',
+        ),
+      );
+    });
+
+    test('should not check other networks', () => {
+      expect(() =>
+        checkLightningChainIdentity(
+          Logger.disabledLogger,
+          'BTC LND',
+          [],
+          Networks.bitcoinRegtest,
+        ),
+      ).not.toThrow();
+    });
   });
 });

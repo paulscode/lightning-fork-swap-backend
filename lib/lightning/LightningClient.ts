@@ -20,6 +20,8 @@ enum HtlcState {
 type NodeInfo = {
   version: string;
   pubkey: string;
+  // Feature bits the node advertises, where it reports them
+  features?: number[];
   uris: string[];
   peers: number;
   blockHeight: number;

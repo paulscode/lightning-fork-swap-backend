@@ -56,3 +56,34 @@ export const checkChainIdentity = async (
     `${symbol} chain identity confirmed: block ${blake2bActivation.height} is ${hash}`,
   );
 };
+
+/**
+ * Feature bits of a Lightning node on the Bitcoin BLAKE2b chain
+ * (`option_blake2b`, required or optional). A node without either is on the
+ * SHA256 chain, or does not know the BLAKE2b one.
+ */
+export const blake2bFeatureBits = [512, 513];
+
+/**
+ * Throws unless a Lightning node advertises the BLAKE2b feature bit. Like
+ * the chain identity check, only on mainnet; a node that reports no features
+ * cannot tell, and is refused.
+ */
+export const checkLightningChainIdentity = (
+  logger: Logger,
+  service: string,
+  features: number[] | undefined,
+  network: BitcoinNetwork,
+): void => {
+  if (network.bech32 !== 'bc') {
+    return;
+  }
+
+  if (!features?.some((bit) => blake2bFeatureBits.includes(bit))) {
+    throw new ChainIdentityError(
+      `${service} does not advertise feature bit ${blake2bFeatureBits.join(' or ')}: it is not a Lightning node of the Bitcoin BLAKE2b chain`,
+    );
+  }
+
+  logger.verbose(`${service} advertises the BLAKE2b feature bit`);
+};

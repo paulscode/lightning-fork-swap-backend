@@ -276,6 +276,7 @@ class LndClient extends BaseClient<EventTypes> implements LightningClient {
     return {
       version: info.version,
       pubkey: info.identityPubkey,
+      features: Object.keys(info.features ?? {}).map(Number),
       uris: info.uris,
       peers: info.numPeers,
       blockHeight: info.blockHeight,
