@@ -2892,6 +2892,34 @@ describe('SwapNursery', () => {
       );
     });
 
+    test.each`
+      status
+      ${SwapUpdateEvent.TransactionLockupFailed}
+      ${SwapUpdateEvent.SwapExpired}
+      ${SwapUpdateEvent.InvoiceFailedToPay}
+      ${SwapUpdateEvent.TransactionRefunded}
+    `(
+      'should not pay against a lockup of a swap that is $status',
+      async ({ status }) => {
+        mockGetSwapResult = { ...baseMockSwap, status };
+
+        (swapNursery as any).utxoNursery.emit('swap.lockup', {
+          swap: baseMockSwap,
+          transaction: mockTransaction,
+          lockupTransactionVout: baseMockSwap.lockupTransactionVout,
+          confirmed: true,
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          expect.stringContaining(`because it is ${status}`),
+        );
+        expect(mockPayInvoice).not.toHaveBeenCalled();
+        expect(mockClaimUtxo).not.toHaveBeenCalled();
+      },
+    );
+
     test('should return early when payInvoice returns undefined', async () => {
       mockGetSwapResult = baseMockSwap;
       mockPayInvoice.mockResolvedValueOnce(undefined);

@@ -668,6 +668,47 @@ class UtxoNursery extends TypedEventEmitter<{
    * confirmations and now have them. The swaps are found by status, so this
    * also picks up swaps that were waiting when the service restarted.
    */
+  /**
+   * Why a lockup transaction cannot be paid against, if it cannot: what the
+   * transaction is, whatever the database says about it
+   */
+  private lockupFailureReason = (
+    swap: Swap,
+    transaction: Transaction | LiquidTransaction,
+    outputValue: number,
+  ): string | undefined => {
+    if (outputValue === 0) {
+      return Errors.INCORRECT_ASSET_SENT().message;
+    }
+
+    // A coinbase cannot be spent for 100 blocks, and on the Bitcoin BLAKE2b
+    // chain no upgraded node relays a spend of one for 6480. Paying against
+    // it would leave the service unable to claim before the swap times out,
+    // while a miner could mine their own refund: refuse it.
+    if (TxView.of(transaction).isCoinbase()) {
+      return Errors.COINBASE_LOCKUP().message;
+    }
+
+    if (swap.expectedAmount) {
+      if (swap.expectedAmount > outputValue) {
+        return Errors.INSUFFICIENT_AMOUNT(outputValue, swap.expectedAmount)
+          .message;
+      }
+
+      if (
+        this.overpaymentProtector.isUnacceptableOverpay(
+          swap.type,
+          swap.expectedAmount,
+          outputValue,
+        )
+      ) {
+        return Errors.OVERPAID_AMOUNT(outputValue, swap.expectedAmount).message;
+      }
+    }
+
+    return undefined;
+  };
+
   private checkDeepenedLockups = async (
     chainClient: IChainClient,
     wallet: Wallet,
@@ -712,8 +753,28 @@ class UtxoNursery extends TypedEventEmitter<{
           `Lockup ${swap.lockupTransactionId} of Swap ${swap.id} has ${tx.confirmations} confirmations`,
         );
         this.deepLockupsEmitted.add(swap.id);
+        const transaction = parseTransaction(wallet.type, tx.hex);
+
+        // The status says the lockup passed its checks, but the failure of
+        // one is written after the status: check the transaction again
+        const failureReason = this.lockupFailureReason(
+          swap,
+          transaction,
+          swap.onchainAmount ?? 0,
+        );
+        if (failureReason !== undefined) {
+          this.logger.warn(
+            `Not paying against lockup ${swap.lockupTransactionId} of Swap ${swap.id}: ${failureReason}`,
+          );
+          this.emit('swap.lockup.failed', {
+            swap,
+            reason: failureReason,
+          });
+          continue;
+        }
+
         this.emit('swap.lockup', {
-          transaction: parseTransaction(wallet.type, tx.hex) as Transaction,
+          transaction: transaction as Transaction,
           lockupTransactionVout: swap.lockupTransactionVout!,
           confirmed: true,
           swap,
@@ -894,58 +955,18 @@ class UtxoNursery extends TypedEventEmitter<{
       return;
     }
 
-    if (outputValue === 0) {
+    const failureReason = this.lockupFailureReason(
+      updatedSwap,
+      transaction,
+      outputValue,
+    );
+    if (failureReason !== undefined) {
       this.emit('swap.lockup.failed', {
         swap: updatedSwap,
-        reason: Errors.INCORRECT_ASSET_SENT().message,
+        reason: failureReason,
       });
 
       return;
-    }
-
-    // A coinbase cannot be spent for 100 blocks, and on the Bitcoin BLAKE2b
-    // chain no upgraded node relays a spend of one for 6480. Paying against
-    // it would leave the service unable to claim before the swap times out,
-    // while a miner could mine their own refund: refuse it.
-    if (TxView.of(transaction).isCoinbase()) {
-      this.emit('swap.lockup.failed', {
-        swap: updatedSwap,
-        reason: Errors.COINBASE_LOCKUP().message,
-      });
-
-      return;
-    }
-
-    if (updatedSwap.expectedAmount) {
-      if (updatedSwap.expectedAmount > outputValue) {
-        this.emit('swap.lockup.failed', {
-          swap: updatedSwap,
-          reason: Errors.INSUFFICIENT_AMOUNT(
-            outputValue,
-            updatedSwap.expectedAmount,
-          ).message,
-        });
-
-        return;
-      }
-
-      if (
-        this.overpaymentProtector.isUnacceptableOverpay(
-          swap.type,
-          updatedSwap.expectedAmount,
-          outputValue,
-        )
-      ) {
-        this.emit('swap.lockup.failed', {
-          swap: updatedSwap,
-          reason: Errors.OVERPAID_AMOUNT(
-            outputValue,
-            updatedSwap.expectedAmount,
-          ).message,
-        });
-
-        return;
-      }
     }
 
     {

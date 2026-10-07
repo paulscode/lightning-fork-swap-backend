@@ -373,6 +373,17 @@ class SwapNursery extends TypedEventEmitter<SwapNurseryEvents> {
               return;
             }
 
+            // A lockup found wanting (a coinbase, too little) or a swap that
+            // expired is never paid, however late its event arrives
+            if (
+              FailedSwapUpdateEvents.includes(swap.status as SwapUpdateEvent)
+            ) {
+              this.logger.warn(
+                `Not acting on lockup of Submarine Swap ${swap.id} because it is ${swap.status}`,
+              );
+              return;
+            }
+
             if (
               swap.invoice &&
               !(await this.hasValidCollateralForNewPayment(swap))

@@ -2777,6 +2777,7 @@ describe('UtxoNursery', () => {
         status: SwapUpdateEvent.TransactionConfirmed,
         lockupTransactionId: 'txid',
         lockupTransactionVout: 0,
+        onchainAmount: 100_000,
       };
       SwapRepository.getSwaps = jest.fn().mockResolvedValue([swap]);
 
@@ -2801,6 +2802,43 @@ describe('UtxoNursery', () => {
       await nursery['checkDeepenedLockups'](btcChainClient, btcWallet);
       expect(emittedSwaps).toEqual(['waiting']);
     });
+
+    // The coinbase of block 5 of a regtest chain
+    const coinbaseHex =
+      '020000000001010000000000000000000000000000000000000000000000000000000000000000ffffffff025500ffffffff0200f2052a010000001976a914635ea95b3fdbc03a2dc8451b7dd4a20253056d4c88ac0000000000000000266a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf90120000000000000000000000000000000000000000000000000000000000000000000000000';
+
+    test.each`
+      description           | hex                          | overrides                                             | reason
+      ${'a coinbase'}       | ${coinbaseHex}               | ${{ onchainAmount: 100_000 }}                         | ${Errors.COINBASE_LOCKUP().message}
+      ${'too little'}       | ${sampleTransactions.lockup} | ${{ onchainAmount: 90_000, expectedAmount: 100_000 }} | ${Errors.INSUFFICIENT_AMOUNT(90_000, 100_000).message}
+      ${'nothing recorded'} | ${sampleTransactions.lockup} | ${{}}                                                 | ${Errors.INCORRECT_ASSET_SENT().message}
+    `(
+      'should fail, not hand on, a deep lockup that is $description',
+      async ({ hex, overrides, reason }) => {
+        nursery['requiredLockupConfirmations'].set('BTC', 3);
+        const swap = {
+          id: 'wanting',
+          pair: 'BTC/BTC',
+          orderSide: OrderSide.SELL,
+          status: SwapUpdateEvent.TransactionConfirmed,
+          lockupTransactionId: 'txid',
+          lockupTransactionVout: 0,
+          ...overrides,
+        };
+        SwapRepository.getSwaps = jest.fn().mockResolvedValue([swap]);
+        mockGetRawTransactionVerboseResult = () => ({ confirmations: 5, hex });
+
+        const lockup = jest.fn();
+        const failed = jest.fn();
+        nursery.on('swap.lockup', lockup);
+        nursery.on('swap.lockup.failed', failed);
+
+        await nursery['checkDeepenedLockups'](btcChainClient, btcWallet);
+
+        expect(lockup).not.toHaveBeenCalled();
+        expect(failed).toHaveBeenCalledWith({ swap, reason });
+      },
+    );
 
     test('should forget handed on swaps once they have moved on', async () => {
       nursery['requiredLockupConfirmations'].set('BTC', 3);
