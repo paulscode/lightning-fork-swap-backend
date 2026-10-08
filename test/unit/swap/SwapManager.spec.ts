@@ -1443,6 +1443,67 @@ describe('SwapManager', () => {
     ).rejects.toEqual(ServiceErrors.INVOICE_EXPIRY_TOO_SHORT());
   });
 
+  test('should reject invoices that expire before the lockup can be deep enough', async () => {
+    const swap = {
+      id: 'expiryBeforeConfirmations',
+      pair: 'BTC/BTC',
+      chainCurrency: 'BTC',
+      lightningCurrency: 'BTC',
+      type: SwapType.Submarine,
+      orderSide: OrderSide.BUY,
+      preimageHash:
+        '1558d179d9e3de706997e3b6bb33f704a5b8086b27538fd04ef5e313467333b8',
+      expectedAmount: 350,
+      onchainAmount: 350,
+    } as any as Swap;
+
+    SwapRepository.getSwap = jest.fn().mockResolvedValue(swap);
+
+    const invoiceSignKeys = getHexBuffer(
+      'bd67aa04f8e310ad257f2d7f5a2f4cf314c6c6017515748fb05c33763b1c6744',
+    );
+    const invoiceEncode = bolt11.encode({
+      payeeNodeKey: getHexString(
+        Buffer.from(secp256k1.getPublicKey(invoiceSignKeys, true)),
+      ),
+      satoshis: 200,
+      tags: [
+        {
+          data: swap.preimageHash,
+          tagName: 'payment_hash',
+        },
+        {
+          // 30 minutes: two blocks, but not three confirmations and a block
+          data: 1800,
+          tagName: 'expire_time',
+        },
+      ],
+    });
+
+    const invoice = bolt11.sign(invoiceEncode, invoiceSignKeys).paymentRequest!;
+
+    manager['rateProvider'].acceptZeroConf = jest
+      .fn()
+      .mockImplementation(() => false);
+
+    manager.currencies.set('BTC', {
+      ...btcCurrency,
+      requiredConfirmations: 3,
+    } as Currency);
+
+    const fees = {
+      baseFee: 100,
+      percentageFee: 50,
+      percentageFeeRate: 0.05,
+    };
+    const emitSwapInvoiceSet = jest.fn().mockImplementation();
+
+    await expect(
+      manager.setSwapInvoice(swap, invoice, 1, fees, true, emitSwapInvoiceSet),
+    ).rejects.toEqual(ServiceErrors.INVOICE_EXPIRY_TOO_SHORT());
+    manager.currencies.delete('BTC');
+  });
+
   test('should create Reverse Swaps', async () => {
     manager['recreateFilters'] = jest.fn().mockImplementation();
     manager['recreateSubscriptions'] = jest.fn().mockImplementation();

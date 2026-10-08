@@ -725,10 +725,19 @@ class SwapManager {
         const minutesUntilExpiry =
           (decodedInvoice.expiryTimestamp - getUnixTime()) / 60;
 
-        // When we do not accept 0-conf, we make sure there is enough time for a lockup transaction to confirm
+        // When we do not accept 0-conf, we make sure there is enough time for
+        // a lockup transaction to confirm as deep as the payment waits for,
+        // with a block to spare
         if (!acceptZeroConf) {
+          const confirmations = Math.max(
+            1,
+            Math.ceil(
+              this.currencies.get(chainCurrency)?.requiredConfirmations ?? 1,
+            ),
+          );
           if (
-            (TimeoutDeltaProvider.blockTimes.get(chainCurrency) || 0) * 2 >
+            (TimeoutDeltaProvider.blockTimes.get(chainCurrency) || 0) *
+              (confirmations + 1) >
             minutesUntilExpiry
           ) {
             throw ServiceErrors.INVOICE_EXPIRY_TOO_SHORT();
