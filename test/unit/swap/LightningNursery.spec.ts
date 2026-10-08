@@ -266,6 +266,44 @@ describe('LightningNursery', () => {
         }
       },
     );
+
+    test.each`
+      parts                            | locksUp
+      ${LightningNursery.maxHtlcs}     | ${true}
+      ${LightningNursery.maxHtlcs + 1} | ${false}
+    `(
+      'should lock up only for a payment in at most maxHtlcs parts: $parts',
+      async ({ parts, locksUp }) => {
+        mockHtlcs = Array.from({ length: parts }, () => ({
+          state: HtlcState.Accepted,
+          expiryHeight: required + 100,
+        }));
+        // Parts already given back do not count
+        mockHtlcs.push({ state: HtlcState.Cancelled, expiryHeight: required });
+        mockGetReverseSwapResult = {
+          invoice,
+          preimageHash,
+          timeoutBlockHeight,
+          minerFeeInvoicePreimage: null,
+        };
+
+        let paid = 0;
+        nursery.on('invoice.paid', () => {
+          paid += 1;
+        });
+
+        await emitHtlcAccepted(invoice);
+
+        expect(paid).toEqual(locksUp ? 1 : 0);
+        if (locksUp) {
+          expect(mockCancelHoldInvoice).not.toHaveBeenCalled();
+        } else {
+          expect(mockCancelHoldInvoice).toHaveBeenCalledWith(
+            getHexBuffer(preimageHash),
+          );
+        }
+      },
+    );
   });
 
   test('should handle Reverse Swaps without prepay miner fee', async () => {

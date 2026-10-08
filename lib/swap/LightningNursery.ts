@@ -25,6 +25,11 @@ class LightningNursery extends TypedEventEmitter<{
   public static readonly holdExpiryDelta = 18;
   // Blocks the service's refund of a timed out lockup gets to confirm
   public static readonly refundConfirmationMargin = 12;
+  // Parts a reverse swap's payment may come in. Each holds an HTLC slot of
+  // one of our channels (483 at most) until the swap ends, a day or more:
+  // paid in hundreds of small parts, a few swaps would fill every slot.
+  // Wallets split a payment into a handful (lnd: at most 16).
+  public static readonly maxHtlcs = 16;
 
   private lock = new InstrumentedLock('lightningNursery');
 
@@ -132,7 +137,8 @@ class LightningNursery extends TypedEventEmitter<{
   };
 
   /**
-   * Whether every HTLC held for a reverse swap's invoice expires late enough
+   * Whether the payment came in no more than `maxHtlcs` parts, and every
+   * HTLC held for a reverse swap's invoice expires late enough
    * that lnd will still be holding it when the service's on-chain refund can
    * confirm. lnd cancels a held invoice `holdExpiryDelta` blocks before its
    * earliest HTLC expires; if that comes before the lockup times out, the
@@ -147,8 +153,21 @@ class LightningNursery extends TypedEventEmitter<{
     const { htlcs } = await lightningClient.lookupHoldInvoice(
       getHexBuffer(reverseSwap.preimageHash),
     );
-    const expiries = (htlcs ?? [])
-      .filter((htlc) => htlc.state === HtlcState.Accepted)
+    const accepted = (htlcs ?? []).filter(
+      (htlc) => htlc.state === HtlcState.Accepted,
+    );
+
+    if (accepted.length > LightningNursery.maxHtlcs) {
+      this.logger.warn(
+        `Cancelling hold invoice of Reverse Swap ${reverseSwap.id}: paid in ${accepted.length} parts, more than ${LightningNursery.maxHtlcs}`,
+      );
+      await lightningClient.cancelHoldInvoice(
+        getHexBuffer(reverseSwap.preimageHash),
+      );
+      return false;
+    }
+
+    const expiries = accepted
       .map((htlc) => htlc.expiryHeight)
       .filter((height): height is number => height !== undefined);
 
