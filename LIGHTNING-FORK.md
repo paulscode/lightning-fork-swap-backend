@@ -148,6 +148,14 @@ Found by a review of the submarine and reverse swap paths.
       workers (`fd76d116`);
     - a cooperative claim settles the invoice only while the swap can still
       be claimed (`6bc3783f`).
+13. **From the review after going live**:
+    - a submarine invoice must leave a block time per required
+      confirmation, plus one, before it expires; it left two, from when a
+      lockup needed one confirmation (`dc601bb8`);
+    - a reverse swap paid in more than 16 parts is cancelled before any
+      lockup: each part holds an HTLC slot of one of our channels until the
+      swap ends, so a few swaps paid in hundreds of parts could fill every
+      slot (`31f55232`).
 
 ## Configuration this fork expects
 
@@ -159,7 +167,11 @@ network = "mainnet"            # the sidecar defaults to regtest without it
 [swap]
 deferredClaimSymbols = []      # claim each swap on its own: a batch that fails
                                # is retried whole and would stall the others
-cltvDelta = 72
+cltvDelta = 144                # with lnd's sweeper.nodeadlineconftarget=144
+
+[routing]
+default = 0.001                # at most the submarine fee: a node on the route
+                               # could otherwise pocket the difference
 
 [[pairs]]
 base = "BTC"
@@ -170,7 +182,7 @@ swapTypes = ["submarine", "reverse"]
   reverse = 1440
   swapMinimal = 1440
   swapMaximal = 2880
-  swapTaproot = 10080
+  swapTaproot = 4320
 
 [[currencies]]
 symbol = "BTC"
@@ -195,8 +207,8 @@ docker build -f docker/boltz/Dockerfile --build-arg NODE_VERSION=24-bookworm-sli
 ```
 
 - The Rust tests link against `libpq`. `PQ_LIB_DIR` can point at a copy.
-- The full TypeScript unit suite (120 suites, 2,740 tests) passes on
-  `6bc3783f`, with tsc and eslint clean.
+- The full TypeScript unit suite (120 suites, 2,743 tests) passes on
+  `31f55232`, with tsc and eslint clean.
 - The Rust tests for the changed modules pass.
 - The full Rust suite needs Postgres and the regtest services, and has not
   been run on this fork.
