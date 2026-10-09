@@ -82,6 +82,13 @@ pub struct Config {
     /// Minimum fee rate in sat/vbyte used as floor for fee estimation
     #[serde(rename = "feeFloor")]
     pub fee_floor: Option<f64>,
+
+    /// Maximum fee rate in sat/vbyte the estimation may return. On a chain
+    /// with few miners, one can raise the node's estimate by mining its own
+    /// high-fee transactions (the fees come back to it) and make every claim,
+    /// lockup and refund of the service overpay.
+    #[serde(rename = "feeCeiling")]
+    pub fee_ceiling: Option<f64>,
 }
 
 #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]

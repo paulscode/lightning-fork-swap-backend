@@ -39,6 +39,7 @@ pub struct ChainClient {
     cache: Cache,
     client_type: Type,
     fee_floor: f64,
+    fee_ceiling: Option<f64>,
     mempool_thresholds: Thresholds,
     zmq_client: ZmqClient,
     mempool_space: Option<MempoolSpace>,
@@ -77,6 +78,15 @@ impl ChainClient {
         };
         let fee_floor = config.fee_floor.unwrap_or(default_floor);
         debug!("Using {symbol} fee floor: {fee_floor:0.2}");
+        let fee_ceiling = config.fee_ceiling;
+        if let Some(ceiling) = fee_ceiling {
+            if ceiling < fee_floor {
+                return Err(anyhow::anyhow!(
+                    "{symbol} fee ceiling {ceiling} is below its floor {fee_floor}"
+                ));
+            }
+            debug!("Using {symbol} fee ceiling: {ceiling:0.2}");
+        }
 
         let mempool_cfg = config.mempool.as_ref();
         let mempool_thresholds = Thresholds {
@@ -115,6 +125,7 @@ impl ChainClient {
             cache,
             network,
             fee_floor,
+            fee_ceiling,
             mempool_thresholds,
             client_type,
             client: RpcClient::new(symbol.clone(), config.clone())?,
@@ -241,6 +252,14 @@ impl ChainClient {
                 Some(&[RpcParam::Str(block_hash), RpcParam::Int(1)]),
             )
             .await
+    }
+
+    fn clamp_fee(fee: f64, floor: f64, ceiling: Option<f64>) -> f64 {
+        let fee = f64::max(fee, floor);
+        match ceiling {
+            Some(ceiling) => f64::min(fee, ceiling),
+            None => fee,
+        }
     }
 
     fn round_to_1_decimal_place(x: f64) -> f64 {
@@ -640,7 +659,11 @@ impl Client for ChainClient {
     }
 
     async fn estimate_fee(&self) -> anyhow::Result<f64> {
-        let fee = f64::max(self.estimate_fee_raw(self.fee_floor).await, self.fee_floor);
+        let fee = Self::clamp_fee(
+            self.estimate_fee_raw(self.fee_floor).await,
+            self.fee_floor,
+            self.fee_ceiling,
+        );
         Ok(Self::round_to_1_decimal_place(fee))
     }
 
@@ -762,6 +785,15 @@ impl Client for ChainClient {
 
 #[cfg(test)]
 pub mod test {
+    #[test]
+    fn test_clamp_fee() {
+        assert_eq!(super::ChainClient::clamp_fee(0.5, 1.0, None), 1.0);
+        assert_eq!(super::ChainClient::clamp_fee(250.0, 1.0, None), 250.0);
+        assert_eq!(super::ChainClient::clamp_fee(250.0, 1.0, Some(50.0)), 50.0);
+        assert_eq!(super::ChainClient::clamp_fee(3.0, 1.0, Some(50.0)), 3.0);
+        assert_eq!(super::ChainClient::clamp_fee(0.2, 1.0, Some(50.0)), 1.0);
+    }
+
     use super::*;
     use crate::chain::chain_client::ChainClient;
     use crate::chain::types::{RawMempool, RpcParam, Type};
