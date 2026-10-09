@@ -8,6 +8,7 @@ import {
   aggregateNodeStats,
   checkPreimageHashLength,
   errorResponse,
+  internalErrorMessage,
   markSwap,
   resolveErrorStatusCode,
   validateArray,
@@ -262,6 +263,42 @@ describe('Utils', () => {
 
     expect(res.status).toHaveBeenNthCalledWith(5, 401);
     expect(res.json).toHaveBeenNthCalledWith(5, { error: error.message });
+  });
+
+  test.each`
+    error
+    ${'connect ECONNREFUSED 172.18.0.5:8332'}
+    ${{ message: 'getaddrinfo EAI_AGAIN postgres' }}
+    ${{ details: 'request to http://10.0.0.7:9003 failed' }}
+    ${{ message: 'SequelizeConnectionError: connection refused' }}
+    ${{ message: '14 UNAVAILABLE: No connection established' }}
+  `(
+    'should not tell clients about the service insides: $error',
+    ({ error }) => {
+      const req = mockRequest({});
+      const res = mockResponse();
+
+      errorResponse(Logger.disabledLogger, req, res, error);
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith({ error: internalErrorMessage });
+    },
+  );
+
+  test.each`
+    error
+    ${{ details: 'bad-txns-inputs-missingorspent' }}
+    ${{ message: 'invoice expired already' }}
+    ${{ message: 'swap with id 1.2.3.4 not found' }}
+  `('should pass on errors about the request: $error', ({ error }) => {
+    const req = mockRequest({});
+    const res = mockResponse();
+
+    errorResponse(Logger.disabledLogger, req, res, error);
+
+    expect(res.json).toHaveBeenCalledWith({
+      error: error.details ?? error.message,
+    });
   });
 
   test('should return 409 for duplicate preimage conflicts', () => {

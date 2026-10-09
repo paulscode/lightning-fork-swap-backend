@@ -117,6 +117,22 @@ export const validateArray = (
   }
 };
 
+// Errors that describe the service's insides (where its node, database or
+// other services are, and how reaching them failed) rather than the request:
+// clients get a generic message, the log gets the details
+const internalErrorPatterns = [
+  /\b(ECONNREFUSED|ECONNRESET|ETIMEDOUT|EHOSTUNREACH|EAI_AGAIN|ENOTFOUND|EPIPE)\b/,
+  /getaddrinfo|socket hang up/i,
+  /\b\d{1,3}(\.\d{1,3}){3}:\d{2,5}\b/,
+  /\bSequelize|\bpostgres|\brelation "|\bduplicate key value\b/i,
+  /\b(UNAVAILABLE|DEADLINE_EXCEEDED|UNAUTHENTICATED|PERMISSION_DENIED): /,
+];
+export const internalErrorMessage = 'internal error';
+
+const isInternalError = (message: unknown): boolean =>
+  typeof message === 'string' &&
+  internalErrorPatterns.some((pattern) => pattern.test(message));
+
 export const errorResponse = (
   logger: Logger,
   req: Request,
@@ -125,6 +141,19 @@ export const errorResponse = (
   statusCode = 400,
 ): void => {
   const resolvedStatusCode = resolveErrorStatusCode(error, statusCode);
+  const message =
+    typeof error === 'string'
+      ? error
+      : ((error as any)?.details ?? (error as any)?.message);
+
+  if (isInternalError(message)) {
+    logger.warn(
+      `Request ${req.method} ${req.originalUrl} failed: ${String(message)}`,
+    );
+    setContentTypeJson(res);
+    res.status(resolvedStatusCode).json({ error: internalErrorMessage });
+    return;
+  }
 
   if (typeof error === 'string') {
     writeErrorResponse(logger, req, res, resolvedStatusCode, { error });
