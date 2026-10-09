@@ -357,6 +357,12 @@ class DeferredClaimer extends CoopSignerBase<{
           throw Errors.NOT_ELIGIBLE_FOR_COOPERATIVE_CLAIM_BROADCAST();
         }
 
+        // Our nonce signs once: two partial signatures with one nonce for
+        // two of their nonces would give away the swap's key. A failed
+        // attempt needs new details (a new nonce) to try again.
+        const cooperative = toClaim.cooperative;
+        toClaim.cooperative = undefined;
+
         await this.lock.acquire(
           DeferredClaimer.swapsToClaimLock,
           'broadcastCooperative',
@@ -364,8 +370,8 @@ class DeferredClaimer extends CoopSignerBase<{
             const { fee } = await this.broadcastCooperativeTransaction(
               swap,
               chainCurrency,
-              toClaim.cooperative!.musig,
-              toClaim.cooperative!.transaction,
+              cooperative.musig,
+              cooperative.transaction,
               theirPubNonce,
               theirPartialSignature,
             );
