@@ -10,8 +10,6 @@ import RefundTransactionRepository from '../db/repositories/RefundTransactionRep
 import type Sidecar from '../sidecar/Sidecar';
 import type { Currency } from '../wallet/WalletManager';
 
-// TODO: check replacements
-
 class RefundWatcher extends TypedEventEmitter<{
   'refund.confirmed': {
     swap: ReverseSwap | ChainSwapInfo;
@@ -19,6 +17,11 @@ class RefundWatcher extends TypedEventEmitter<{
   };
 }> {
   private static readonly defaultRequiredConfirmations = 1;
+  // A refund still unconfirmed this many blocks after the swap's timeout is
+  // logged as an error (the alert monitor reports it). For a reverse swap
+  // lnd cancels the hold invoice at the earliest about 42 blocks after it,
+  // and the payer could then claim the lockup with the preimage.
+  public static readonly lateRefundBlocks = 20;
   private static readonly pendingTransactionsLock = 'pendingTransactions';
 
   private readonly lock = new InstrumentedLock('refundWatcher');
@@ -80,9 +83,12 @@ class RefundWatcher extends TypedEventEmitter<{
     }
 
     const requiredConfirmations = this.getRequiredConfirmations(refundCurrency);
-    const confirmations = await this.getConfirmations(refundCurrency, tx.id);
+    const confirmations = await this.getUtxoConfirmations(
+      refundCurrency,
+      tx,
+      swap,
+    );
 
-    // TODO: what if it's getting awfully close to swap timeout and still not confirmed? maybe a check here and alert or bump the fee?
     if (confirmations < requiredConfirmations) {
       return;
     }
@@ -101,6 +107,69 @@ class RefundWatcher extends TypedEventEmitter<{
       swap,
       refundTransaction: tx.id,
     });
+  };
+
+  /**
+   * Confirmations of a refund; for UTXO chains, a refund that left the
+   * node's mempool is sent again (from the wallet, which it pays), and one
+   * that is late is logged as an error.
+   */
+  private getUtxoConfirmations = async (
+    currency: Currency,
+    tx: RefundTransaction,
+    swap: ReverseSwap | ChainSwapInfo,
+  ): Promise<number> => {
+    if (
+      currency.type !== CurrencyType.BitcoinLike &&
+      currency.type !== CurrencyType.Liquid
+    ) {
+      return await this.getConfirmations(currency, tx.id);
+    }
+
+    const chainClient = currency.chainClient!;
+    let confirmations: number;
+    try {
+      confirmations =
+        (await chainClient.getRawTransactionVerbose(tx.id)).confirmations ?? 0;
+    } catch (error) {
+      await this.sendAgain(currency, tx, swap, error);
+      confirmations = 0;
+    }
+
+    if (confirmations === 0) {
+      const timeout =
+        'sendingData' in swap
+          ? swap.sendingData.timeoutBlockHeight
+          : swap.timeoutBlockHeight;
+      const { blocks } = await chainClient.getBlockchainInfo();
+      if (blocks - timeout >= RefundWatcher.lateRefundBlocks) {
+        this.logger.error(
+          `Refund ${tx.id} of ${swapTypeToPrettyString(swap.type)} Swap ${swap.id} is not confirmed ${blocks - timeout} blocks after the swap's timeout`,
+        );
+      }
+    }
+
+    return confirmations;
+  };
+
+  private sendAgain = async (
+    currency: Currency,
+    tx: RefundTransaction,
+    swap: ReverseSwap | ChainSwapInfo,
+    error: unknown,
+  ) => {
+    const chainClient = currency.chainClient!;
+    this.logger.warn(
+      `Refund ${tx.id} of ${swapTypeToPrettyString(swap.type)} Swap ${swap.id} not found (${formatError(error)}); sending it again`,
+    );
+    try {
+      const { hex } = await chainClient.getWalletTransaction(tx.id);
+      await chainClient.sendRawTransaction(hex);
+    } catch (sendError) {
+      this.logger.warn(
+        `Could not send refund ${tx.id} of ${swapTypeToPrettyString(swap.type)} Swap ${swap.id} again: ${formatError(sendError)}`,
+      );
+    }
   };
 
   private getRequiredConfirmations = (currency: Currency) =>
