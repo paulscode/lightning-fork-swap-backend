@@ -16,7 +16,7 @@
     "postcompile": "cp package.json dist && cp -R lib/api/static dist/lib/api/static && cp swagger-spec.json dist/lib/api/static",
     "compile:typescript:test": "tsc --project tsconfig.test.json",
     "compile:rust": "cargo build",
-    "compile:rust:release": "cargo build --release",
+    "compile:rust:release": "cargo build --release --locked",
     "swagger": "node swagger.js",
     "swagger:validate": "cd tools && uv sync && uv run openapi-spec-validator ../swagger-spec.json",
     "swagger:ui": "docker run --rm -p 8082:8080 -e SWAGGER_JSON=/boltz-backend/swagger-spec.json -v .:/boltz-backend swaggerapi/swagger-ui",

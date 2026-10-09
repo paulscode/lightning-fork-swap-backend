@@ -202,7 +202,7 @@ requiredConfirmations = 3
 npm ci                                   # also generates protos the Rust build needs
 npx tsc --noEmit -p . && npx jest test/unit
 cd boltzr && cargo test --bin boltzr -- chain::header_v2 lightning::invoice
-docker build -f docker/boltz/Dockerfile --build-arg NODE_VERSION=24-bookworm-slim \
+docker build -f docker/boltz/Dockerfile --build-arg NODE_VERSION=24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 \
   --build-arg SOURCE=local -t lfswap/boltz:dev .
 ```
 

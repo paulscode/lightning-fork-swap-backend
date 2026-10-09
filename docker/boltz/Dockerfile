@@ -28,7 +28,8 @@ RUN wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg -
     apt-get update && \
     apt-get -y install libpq-dev
 
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+# A fixed toolchain, so that a rebuild compiles with the same compiler
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.98.1
 ENV PATH="/root/.cargo/bin:${PATH}"
 
 FROM base AS source-remote
