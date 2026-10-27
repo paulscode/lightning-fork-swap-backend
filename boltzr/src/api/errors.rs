@@ -91,20 +91,11 @@ pub async fn error_middleware(request: Request<Body>, next: Next) -> Response<Bo
 
 pub async fn logging_middleware(request: Request<Body>, next: Next) -> Response<Body> {
     let request_method = request.method().clone();
-    let request_uri = request.uri().clone();
-    let (parts, body) = request.into_parts();
+    // The path only: neither the query nor the body, which hold what the
+    // user sent (an xpub to restore swaps with, keys, addresses)
+    let request_path = request.uri().path().to_string();
 
-    let (request_body_bytes, request_body_str) = match read_body(body).await {
-        Ok(body) => body,
-        Err(err) => (
-            axum::body::Bytes::new(),
-            Some(format!("could not handle request body: {err}")),
-        ),
-    };
-
-    let response = next
-        .run(Request::from_parts(parts, Body::from(request_body_bytes)))
-        .await;
+    let response = next.run(request).await;
     if !response.status().is_server_error() && !response.status().is_client_error() {
         return response;
     }
@@ -120,13 +111,9 @@ pub async fn logging_middleware(request: Request<Body>, next: Next) -> Response<
 
     warn!(
         status = parts.status.as_u16(),
-        "Request to {} {}{} failed with {}{}",
+        "Request to {} {} failed with {}{}",
         request_method,
-        request_uri,
-        match request_body_str {
-            Some(str) => format!(" ({str})"),
-            None => "".to_string(),
-        },
+        request_path,
         parts.status.as_u16(),
         match response_body_str {
             Some(str) => format!(": {str}"),
@@ -156,6 +143,36 @@ mod test {
     use http_body_util::BodyExt;
     use rstest::rstest;
     use tower::util::ServiceExt;
+
+    #[tokio::test]
+    async fn test_logging_middleware_passes_the_body_on_untouched() {
+        // The middleware no longer reads the request (it logs no body):
+        // the handler must still get all of it, and an error its answer
+        let router = Router::new()
+            .route(
+                "/restore",
+                axum::routing::post(|body: String| async move {
+                    (StatusCode::BAD_REQUEST, format!("got {} bytes", body.len())).into_response()
+                }),
+            )
+            .layer(axum::middleware::from_fn(logging_middleware));
+
+        let xpub = "xpub".repeat(100);
+        let res = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/restore?secret=1")
+                    .body(Body::from(xpub.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = res.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(body, format!("got {} bytes", xpub.len()));
+    }
 
     #[tokio::test]
     async fn test_error_middleware_ignore_success() {

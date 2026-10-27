@@ -133,6 +133,18 @@ const isInternalError = (message: unknown): boolean =>
   typeof message === 'string' &&
   internalErrorPatterns.some((pattern) => pattern.test(message));
 
+// The route of a request for the log: its pattern when Express matched one
+// ("/v2/swap/reverse/:invoice/bip21"), else its path without the query.
+// Neither the body nor the parameters' values: a failed request's body
+// holds the user's invoice, addresses and keys, and some paths an invoice.
+export const requestRoute = (req: Request): string => {
+  const pattern = req.route?.path;
+  if (typeof pattern === 'string') {
+    return `${req.baseUrl ?? ''}${pattern}`;
+  }
+  return (req.originalUrl ?? req.path ?? '').split('?')[0];
+};
+
 export const errorResponse = (
   logger: Logger,
   req: Request,
@@ -148,7 +160,7 @@ export const errorResponse = (
 
   if (isInternalError(message)) {
     logger.warn(
-      `Request ${req.method} ${req.originalUrl} failed: ${String(message)}`,
+      `Request ${req.method} ${requestRoute(req)} failed: ${String(message)}`,
     );
     setContentTypeJson(res);
     res.status(resolvedStatusCode).json({ error: internalErrorMessage });
@@ -219,11 +231,7 @@ export const writeErrorResponse = (
 ) => {
   if (!errorsNotToLog.includes(error?.error || error)) {
     logger.warn(
-      `Request ${req.method} ${req.originalUrl} ${
-        req.body && Object.keys(req.body).length > 0
-          ? `${JSON.stringify(req.body)} `
-          : ''
-      }failed: ${JSON.stringify(error)}`,
+      `Request ${req.method} ${requestRoute(req)} failed: ${JSON.stringify(error)}`,
     );
   }
 

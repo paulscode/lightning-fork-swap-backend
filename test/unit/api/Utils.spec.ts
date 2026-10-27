@@ -10,6 +10,7 @@ import {
   errorResponse,
   internalErrorMessage,
   markSwap,
+  requestRoute,
   resolveErrorStatusCode,
   validateArray,
   validateRequest,
@@ -218,6 +219,40 @@ describe('Utils', () => {
       peers: 0,
       oldestChannel: undefined,
     });
+  });
+
+  test('should log a failed request by its route, without its body', () => {
+    const invoice = 'lnbc1secretinvoice';
+    const req = {
+      ...mockRequest({ invoice, claimAddress: 'bc1psecretaddress' }),
+      method: 'GET',
+      baseUrl: '/v2',
+      route: { path: '/swap/reverse/:invoice/bip21' },
+      originalUrl: `/v2/swap/reverse/${invoice}/bip21?x=1`,
+    } as any;
+    const logger = { warn: jest.fn() } as any;
+
+    errorResponse(logger, req, mockResponse(), 'invalid invoice');
+    errorResponse(logger, req, mockResponse(), {
+      details: 'connect ECONNREFUSED 10.0.0.7:9003',
+    });
+
+    expect(logger.warn).toHaveBeenCalledTimes(2);
+    for (const [line] of logger.warn.mock.calls) {
+      expect(line).toContain('GET /v2/swap/reverse/:invoice/bip21 failed: ');
+      expect(line).not.toContain('secret');
+    }
+    // The shape the monitor counts creation refusals by
+    expect(
+      requestRoute({
+        baseUrl: '/v2',
+        route: { path: '/swap/reverse' },
+      } as any),
+    ).toEqual('/v2/swap/reverse');
+    // Unmatched: the path without the query
+    expect(requestRoute({ originalUrl: '/v2/nothing?token=1' } as any)).toEqual(
+      '/v2/nothing',
+    );
   });
 
   test('should handle error responses', () => {
