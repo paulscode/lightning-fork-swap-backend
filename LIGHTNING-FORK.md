@@ -156,6 +156,10 @@ Found by a review of the submarine and reverse swap paths.
       lockup: each part holds an HTLC slot of one of our channels until the
       swap ends, so a few swaps paid in hundreds of parts could fill every
       slot (`31f55232`).
+14. **Users' privacy in the logs**: a failed request is logged by its
+    route's pattern and its error, never its body (a swap's invoice, the
+    user's keys and addresses, the rescue xpub) nor its query; the same in
+    the sidecar (`c43469a8`).
 
 ## Configuration this fork expects
 
